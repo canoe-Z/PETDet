@@ -2,7 +2,7 @@
   "nproc": 10,
   "load_type": "dota",
   "img_dirs": [
-    "/cluster/home/it_stu198/main/datasets/DOTA/test/images/"
+    "data/DOTA1_0/test/images/"
   ],
   "ann_dirs": null,
   "classes": null,
@@ -25,6 +25,6 @@
     116,
     124
   ],
-  "save_dir": "/cluster/home/it_stu198/main/datasets/split_1024_dota1_0/test/",
+  "save_dir": "data/split_ss_dota1_0/test/",
   "save_ext": ".png"
 }

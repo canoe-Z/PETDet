@@ -4,4 +4,6 @@ from .dota import DOTADataset  # noqa: F401, F403
 from .pipelines import *  # noqa: F401, F403
 from .sar import SARDataset  # noqa: F401, F403
 
-__all__ = ['SARDataset', 'DOTADataset', 'build_dataset']
+from .fair1m import FAIR1MDataset
+
+__all__ = ['SARDataset', 'DOTADataset', 'FAIR1MDataset', 'build_dataset']

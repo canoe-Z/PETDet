@@ -2,12 +2,12 @@
   "nproc": 10,
   "load_type": "dota",
   "img_dirs": [
-    "/cluster/home/it_stu198/main/datasets/DOTA/train/images/",
-    "/cluster/home/it_stu198/main/datasets/DOTA/val/images/"
+    "data/DOTA1_0/train/images/",
+    "data/DOTA1_0/val/images/"
   ],
   "ann_dirs": [
-    "/cluster/home/it_stu198/main/datasets/DOTA/train/labelTxt/",
-    "/cluster/home/it_stu198/main/datasets/DOTA/val/labelTxt/"
+    "data/DOTA1_0/train/labelTxt/",
+    "data/DOTA1_0/val/labelTxt/"
   ],
   "classes": null,
   "prior_annfile": null,
@@ -29,6 +29,6 @@
     116,
     124
   ],
-  "save_dir": "/cluster/home/it_stu198/main/datasets/split_1024_dota1_0_test/trainval/",
+  "save_dir": "data/split_ss_dota1_0/trainval/",
   "save_ext": ".png"
 }
