@@ -120,3 +120,8 @@ tmp
 
 # custom
 mmrotate/.mim
+.vscode/
+/data
+.data
+nohup.out
+*save_dirs*
