@@ -1,13 +1,11 @@
 {
   "nproc": 10,
-  "load_type": "dota",
+  "load_type": "fair1m",
   "img_dirs": [
-    "data/DOTA1_0/train/images/",
-    "data/DOTA1_0/val/images/"
+    "data/FAIR1M2_0/train/images/"
   ],
   "ann_dirs": [
-    "data/DOTA1_0/train/labelTxt/",
-    "data/DOTA1_0/val/labelTxt/"
+    "data/FAIR1M2_0/train/labelXml/"
   ],
   "classes": null,
   "prior_annfile": null,
@@ -29,6 +27,6 @@
     116,
     124
   ],
-  "save_dir": "data/split_ss_dota1_0/trainval/",
+  "save_dir": "data/split_ss_fair1m2_0/train/",
   "save_ext": ".png"
 }
