@@ -495,3 +495,78 @@ class RotatedBBoxHead(BaseModule):
             new_rois = torch.cat((rois[:, [0]], bboxes), dim=1)
 
         return new_rois
+
+    @force_fp32(apply_to=('bbox_preds', ))
+    def rotated_refine_bboxes(self, rois, labels, bbox_preds, pos_is_gts, img_metas):
+        """Refine bboxes during training.
+
+        Args:
+            rois (torch.Tensor): Shape (n*bs, 5), where n is image number per
+                GPU, and bs is the sampled RoIs per image. The first column is
+                the image id and the next 4 columns are x1, y1, x2, y2.
+            labels (torch.Tensor): Shape (n*bs, ).
+            bbox_preds (torch.Tensor): Shape (n*bs, 5) or (n*bs, 5*#class).
+            pos_is_gts (list[Tensor]): Flags indicating if each positive bbox
+                is a gt bbox.
+            img_metas (list[dict]): Meta info of each image.
+
+        Returns:
+            list[Tensor]: Refined bboxes of each image in a mini-batch.
+        """
+        img_ids = rois[:, 0].long().unique(sorted=True)
+        assert img_ids.numel() <= len(img_metas)
+
+        bboxes_list = []
+        for i, _ in enumerate(img_metas):
+            inds = torch.nonzero(
+                rois[:, 0] == i, as_tuple=False).squeeze(dim=1)
+            num_rois = inds.numel()
+
+            bboxes_ = rois[inds, 1:]
+            label_ = labels[inds]
+            bbox_pred_ = bbox_preds[inds]
+            img_meta_ = img_metas[i]
+            pos_is_gts_ = pos_is_gts[i]
+
+            bboxes = self.rotated_regress_by_class(bboxes_, label_, bbox_pred_,
+                                           img_meta_)
+
+            # filter gt bboxes
+            pos_keep = 1 - pos_is_gts_
+            keep_inds = pos_is_gts_.new_ones(num_rois)
+            keep_inds[:len(pos_is_gts_)] = pos_keep
+
+            bboxes_list.append(bboxes[keep_inds.type(torch.bool)])
+
+        return bboxes_list
+
+    @force_fp32(apply_to=('bbox_pred', ))
+    def rotated_regress_by_class(self, rois, label, bbox_pred, img_meta):
+        """Regress the bbox for the predicted class. Used in Cascade R-CNN.
+
+        Args:
+            rois (torch.Tensor): shape (n, 4) or (n, 5)
+            label (torch.Tensor): shape (n, )
+            bbox_pred (torch.Tensor): shape (n, 5*(#class)) or (n, 5)
+            img_meta (dict): Image meta info.
+
+        Returns:
+            Tensor: Regressed bboxes, the same shape as input rois.
+        """
+        assert rois.size(1) == 5 or rois.size(1) == 6, repr(rois.shape)
+
+        if not self.reg_class_agnostic:
+            label = label * 4
+            inds = torch.stack((label, label + 1, label + 2, label + 3), 1)
+            bbox_pred = torch.gather(bbox_pred, 1, inds)
+        assert bbox_pred.size(1) == 5
+
+        if rois.size(1) == 5:
+            new_rois = self.bbox_coder.decode(
+                rois, bbox_pred, max_shape=img_meta['img_shape'])
+        else:
+            bboxes = self.bbox_coder.decode(
+                rois[:, 1:], bbox_pred, max_shape=img_meta['img_shape'])
+            new_rois = torch.cat((rois[:, [0]], bboxes), dim=1)
+
+        return new_rois

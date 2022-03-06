@@ -7,10 +7,11 @@ from .roi_extractors import RotatedSingleRoIExtractor
 from .roi_trans_roi_head import RoITransRoIHead
 from .rotate_standard_roi_head import RotatedStandardRoIHead
 from .oriented_double_roi_head import OrientedDoubleHeadRoIHead
+from .oriented_cascade_roi_head import OrientedCascadeRoIHead
 
 __all__ = [
     'RotatedBBoxHead', 'RotatedConvFCBBoxHead', 'RotatedShared2FCBBoxHead',
     'RotatedStandardRoIHead', 'RotatedSingleRoIExtractor',
     'OrientedStandardRoIHead', 'RoITransRoIHead', 'GVRatioRoIHead',
-    'OrientedDoubleHeadRoIHead'
+    'OrientedDoubleHeadRoIHead','OrientedCascadeRoIHead'
 ]
