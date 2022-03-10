@@ -124,4 +124,5 @@ mmrotate/.mim
 /data
 .data
 nohup.out
+queue.sh
 *save_dirs*
