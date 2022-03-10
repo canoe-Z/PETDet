@@ -556,8 +556,8 @@ class RotatedBBoxHead(BaseModule):
         assert rois.size(1) == 5 or rois.size(1) == 6, repr(rois.shape)
 
         if not self.reg_class_agnostic:
-            label = label * 4
-            inds = torch.stack((label, label + 1, label + 2, label + 3), 1)
+            label = label * 5
+            inds = torch.stack((label, label + 1, label + 2, label + 3,label + 4), 1)
             bbox_pred = torch.gather(bbox_pred, 1, inds)
         assert bbox_pred.size(1) == 5
 
