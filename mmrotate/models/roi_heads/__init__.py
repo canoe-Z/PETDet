@@ -9,10 +9,12 @@ from .rotate_standard_roi_head import RotatedStandardRoIHead
 from .oriented_double_roi_head import OrientedDoubleHeadRoIHead
 from .oriented_cascade_roi_head import OrientedCascadeRoIHead
 from .oriented_dynamic_roi_head import OrientedDynamicRoIHead
-
+from .oriented_refine_roi_head import OrientedRefineRoIHead
+from .batch_oriented_roi_head_fpn import BatchOrientedRoIHeadFPN
 __all__ = [
     'RotatedBBoxHead', 'RotatedConvFCBBoxHead', 'RotatedShared2FCBBoxHead',
     'RotatedStandardRoIHead', 'RotatedSingleRoIExtractor',
     'OrientedStandardRoIHead', 'RoITransRoIHead', 'GVRatioRoIHead',
-    'OrientedDoubleHeadRoIHead','OrientedCascadeRoIHead','OrientedDynamicRoIHead'
+    'OrientedDoubleHeadRoIHead','OrientedCascadeRoIHead','OrientedDynamicRoIHead',
+    'OrientedRefineRoIHead','BatchOrientedRoIHeadFPN'
 ]
