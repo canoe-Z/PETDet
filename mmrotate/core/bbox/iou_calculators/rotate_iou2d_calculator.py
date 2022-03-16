@@ -2,6 +2,7 @@
 from mmcv.ops import box_iou_rotated
 
 from .builder import ROTATED_IOU_CALCULATORS
+from ..transforms import hbb2obb
 
 
 @ROTATED_IOU_CALCULATORS.register_module()
@@ -41,6 +42,52 @@ class RBboxOverlaps2D(object):
         if bboxes1.size(-1) == 6:
             bboxes1 = bboxes1[..., :5]
         return rbbox_overlaps(bboxes1.contiguous(), bboxes2.contiguous(), mode,
+                              is_aligned)
+
+    def __repr__(self):
+        """str: a string describing the module"""
+        repr_str = self.__class__.__name__ + '()'
+        return repr_str
+
+
+@ROTATED_IOU_CALCULATORS.register_module()
+class HBBOBBOverlaps2D(object):
+    """2D Overlaps (e.g. IoUs, GIoUs) Calculator."""
+
+    def __call__(self,
+                 bboxes1,
+                 bboxes2,
+                 mode='iou',
+                 is_aligned=False,
+                 version='oc'):
+        """Calculate IoU between HBBs and OBBs.
+        Args:
+            bboxes1 (torch.Tensor): bboxes have shape (m, 4) in
+                <x_lt, y_lt, x_rb, y_rb> format, or shape (m, 5) in
+                 <x_lt, y_lt, x_rb, y_rb, score> format.
+            bboxes2 (torch.Tensor): bboxes have shape (m, 5) in
+                <cx, cy, w, h, a> format, shape (m, 6) in
+                 <cx, cy, w, h, a, score> format, or be empty.
+                 If ``is_aligned `` is ``True``, then m and n must be equal.
+            mode (str): "iou" (intersection over union), "iof" (intersection
+                over foreground), or "giou" (generalized intersection over
+                union).
+            is_aligned (bool, optional): If True, then m and n must be equal.
+                Default False.
+            version (str, optional): Angle representations. Defaults to 'oc'.
+
+        Returns:
+            Tensor: shape (m, n) if ``is_aligned `` is False else shape (m,)
+        """
+        assert bboxes1.size(-1) in [0, 5, 6]
+        assert bboxes2.size(-1) in [0, 4, 5]
+
+        if bboxes2.size(-1) == 5:
+            bboxes2 = bboxes2[..., :4]
+        if bboxes1.size(-1) == 6:
+            bboxes1 = bboxes1[..., :5]
+        rbboxes2 = hbb2obb(bboxes2)
+        return rbbox_overlaps(bboxes1.contiguous(), rbboxes2.contiguous(), mode,
                               is_aligned)
 
     def __repr__(self):
