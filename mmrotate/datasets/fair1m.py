@@ -31,13 +31,24 @@ class FAIR1MDataset(DOTADataset):
                'Tugboat', 'Van', 'Warship', 'other-airplane', 'other-ship',
                'other-vehicle')
 
+    COURSE_TABLE = [0, 0, 0, 0, 0, 3,
+                    3, 0, 0, 0,
+                    0, 4, 2, 0, 2,
+                    1, 2, 1,
+                    2, 1, 3, 4,
+                    1, 1, 1, 4,
+                    2, 3, 2, 2, 2,
+                    1, 2, 1, 0, 1, 2]
+
     def __init__(self,
                  ann_file,
                  pipeline,
                  version='oc',
+                 course_label=False,
                  difficulty=100,
                  **kwargs):
         self.version = version
+        self.course_label = course_label
         self.difficulty = difficulty
 
         super(FAIR1MDataset, self).__init__(ann_file, pipeline, **kwargs)
@@ -47,9 +58,14 @@ class FAIR1MDataset(DOTADataset):
             Params:
                 ann_folder: folder that contains DOTA v1 annotations txt files
         """
-        cls_map = {c: i
-                   for i, c in enumerate(self.CLASSES)
-                   }  # in mmdet v2.0 label is 0-based
+        if self.course_label:
+            cls_map = {c: self.COURSE_TABLE[i]
+                       for i, c in enumerate(self.CLASSES)
+                       }  # in mmdet v2.0 label is 0-based
+        else:
+            cls_map = {c: i
+                       for i, c in enumerate(self.CLASSES)
+                       }  # in mmdet v2.0 label is 0-based
         ann_files = glob.glob(ann_folder + '/*.txt')
         data_infos = []
         if not ann_files:  # test phase
@@ -235,3 +251,24 @@ class FAIR1MDataset(DOTADataset):
         </annotation>
         """
         f.write(tail)
+
+
+@ROTATED_DATASETS.register_module()
+class FAIR1MCourseDataset(FAIR1MDataset):
+    def __init__(self,
+                 ann_file,
+                 pipeline,
+                 version='oc',
+                 course_label=True,
+                 difficulty=100,
+                 **kwargs):
+
+        super(FAIR1MCourseDataset, self).__init__(
+            ann_file,
+            pipeline,
+            version,
+            course_label,
+            difficulty,
+            **kwargs)
+
+        self.CLASSES = ('Airplane', 'Ship', 'Vehicle', 'Court', 'Road')
