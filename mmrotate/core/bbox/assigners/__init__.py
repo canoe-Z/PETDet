@@ -4,6 +4,7 @@ from .convex_assigner import ConvexAssigner
 from .max_convex_iou_assigner import MaxConvexIoUAssigner
 from .sas_assigner import SASAssigner
 from .rotated_atss_assigner import RotatedATSSAssigner
+from .sas_atss_assigner import SASATSSAssigner
 __all__ = [
-    'ConvexAssigner', 'MaxConvexIoUAssigner', 'SASAssigner', 'ATSSKldAssigner','RotatedATSSAssigner'
+    'ConvexAssigner', 'MaxConvexIoUAssigner', 'SASAssigner', 'ATSSKldAssigner','RotatedATSSAssigner','SASATSSAssigner'
 ]

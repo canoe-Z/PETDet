@@ -182,7 +182,7 @@ class FAIR1MDataset(DOTADataset):
         zip_folder = osp.join(out_folder, 'submission_zip')
         os.makedirs(zip_folder)
         with zipfile.ZipFile(
-                osp.join(zip_folder, target_name + '.zip'), 'w',
+                osp.join(zip_folder, 'test.zip'), 'w',
                 zipfile.ZIP_DEFLATED) as t:
             for f in files:
                 t.write(f, os.path.join('test', osp.split(f)[-1]))

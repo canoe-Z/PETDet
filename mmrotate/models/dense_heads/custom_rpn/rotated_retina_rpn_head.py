@@ -6,16 +6,13 @@ from mmcv.ops import batched_nms
 from mmrotate.core import obb2xyxy
 from ...builder import ROTATED_HEADS
 from ..rotated_retina_head import RotatedRetinaHead
-from mmdet.models.dense_heads.dense_test_mixins import BBoxTestMixin
 
 
 @ROTATED_HEADS.register_module()
-class RotatedRetinaRPNHead(RotatedRetinaHead, BBoxTestMixin):
-    def __init__(self, stacked_convs=4, version='oc', **kwargs):
-        self.version = version
+class RotatedRetinaRPNHead(RotatedRetinaHead):
+    def __init__(self, version='oc', **kwargs):  
         super(RotatedRetinaRPNHead, self).__init__(
             num_classes=1,
-            stacked_convs=stacked_convs,
             init_cfg=dict(
                 type='Normal',
                 layer='Conv2d',
@@ -26,6 +23,7 @@ class RotatedRetinaRPNHead(RotatedRetinaHead, BBoxTestMixin):
                     std=0.01,
                     bias_prob=0.09)),
             **kwargs)
+        self.version = version
 
     def loss(self,
              cls_scores,
@@ -63,9 +61,9 @@ class RotatedRetinaRPNHead(RotatedRetinaHead, BBoxTestMixin):
     def _get_bboxes_single(self,
                            cls_score_list,
                            bbox_pred_list,
+                           score_factor_list,
                            mlvl_anchors,
-                           img_shape,
-                           scale_factor,
+                           img_meta,
                            cfg,
                            rescale=False,
                            with_nms=True,
@@ -98,6 +96,7 @@ class RotatedRetinaRPNHead(RotatedRetinaHead, BBoxTestMixin):
         """
         cfg = self.test_cfg if cfg is None else cfg
         cfg = copy.deepcopy(cfg)
+        img_shape = img_meta['img_shape']
 
         # bboxes from different level should be independent during NMS,
         # level_ids are used as labels for batched NMS to separate them
@@ -121,7 +120,7 @@ class RotatedRetinaRPNHead(RotatedRetinaHead, BBoxTestMixin):
                 # to v2.4 we keep BG label as 0 and FG label as 1 in rpn head.
                 scores = rpn_cls_score.softmax(dim=1)[:, 0]
             rpn_bbox_pred = rpn_bbox_pred.permute(
-                1, 2, 0).reshape(-1, 5)
+                1, 2, 0).reshape(-1, self.reg_dim)
 
             anchors = mlvl_anchors[level_idx]
             if cfg.nms_pre > 0 and scores.shape[0] > cfg.nms_pre:

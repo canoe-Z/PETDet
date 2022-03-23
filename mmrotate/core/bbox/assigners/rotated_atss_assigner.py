@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from mmrotate.core.bbox.transforms import obb2poly, obb2xyxy
+from mmrotate.core.bbox.transforms import hbb2obb
 
 from ..builder import BBOX_ASSIGNERS
 from ..iou_calculators.builder import build_iou_calculator
@@ -73,7 +73,10 @@ class RotatedATSSAssigner(BaseAssigner):
 
         # compute iou between all bbox and gt
         assert gt_bboxes.size(1) == 5
-        #target_bboxes = obb2xyxy(gt_bboxes)
+        # if bboxes.size(-1) == 4:
+        #     rbboxes = hbb2obb(bboxes)
+        #     overlaps = self.iou_calculator(rbboxes, gt_bboxes)
+        # elif bboxes.size(-1) == 5:
         overlaps = self.iou_calculator(bboxes, gt_bboxes)
 
         # assign 0 by default
@@ -99,9 +102,12 @@ class RotatedATSSAssigner(BaseAssigner):
         # compute center distance between all bbox and gt
         gt_cx, gt_cy = gt_bboxes[:, 0], gt_bboxes[:, 1]
         gt_points = torch.stack((gt_cx, gt_cy), dim=1)
+
+        #if bboxes.size(-1) == 5:
         bboxes_cx, bboxes_cy = bboxes[:, 0], bboxes[:, 1]
-        # bboxes_cx = (bboxes[:, 0] + bboxes[:, 2]) / 2.0
-        # bboxes_cy = (bboxes[:, 1] + bboxes[:, 3]) / 2.0
+        # elif bboxes.size(-1) == 4:
+        #     bboxes_cx = (bboxes[:, 0] + bboxes[:, 2]) / 2.0
+        #     bboxes_cy = (bboxes[:, 1] + bboxes[:, 3]) / 2.0
         bboxes_points = torch.stack((bboxes_cx, bboxes_cy), dim=1)
 
         distances = (bboxes_points[:, None, :] -
@@ -140,11 +146,6 @@ class RotatedATSSAssigner(BaseAssigner):
 
         is_pos = candidate_overlaps >= overlaps_thr_per_gt[None, :]
 
-        gt_polys = obb2poly(gt_bboxes)
-        inside_flag = points_in_polygons(bboxes_points, gt_polys)
-        is_in_gts = inside_flag[candidate_idxs,
-                                torch.arange(num_gt)].to(is_pos.dtype)
-
         # limit the positive sample's center in gt
         for gt_idx in range(num_gt):
             candidate_idxs[:, gt_idx] += gt_idx * num_bboxes
@@ -172,9 +173,9 @@ class RotatedATSSAssigner(BaseAssigner):
         r_ = W / 2 - offset_x
         t_ = H / 2 + offset_y
         b_ = H / 2 - offset_y
-        is_in_gts_2 = torch.stack([l_, t_, r_, b_], dim=1).min(dim=1)[0] > 0.01
+        is_in_gts = torch.stack([l_, t_, r_, b_], dim=1).min(dim=1)[0] > 0.01
 
-        is_pos = is_pos & is_in_gts_2
+        is_pos = is_pos & is_in_gts
 
         # if an anchor box is assigned to multiple gts,
         # the one with the highest IoU will be selected.

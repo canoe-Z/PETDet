@@ -9,7 +9,7 @@ from .rotated_base_dense_head import RotatedBaseDenseHead
 from mmrotate.core import (aug_multiclass_nms_rotated, bbox_mapping_back,
                            build_assigner, build_bbox_coder,
                            build_prior_generator, build_sampler,
-                           multiclass_nms_rotated, obb2hbb,
+                           multiclass_nms_rotated, obb2hbb, obb2xyxy,
                            rotated_anchor_inside_flags)
 from ..builder import ROTATED_HEADS, build_loss
 from mmdet.models.dense_heads.dense_test_mixins import BBoxTestMixin
@@ -39,6 +39,7 @@ class RotatedAnchorHead(RotatedBaseDenseHead, BBoxTestMixin):
                  num_classes,
                  in_channels,
                  feat_channels=256,
+                 reg_dim=5,
                  anchor_generator=dict(
                      type='RotatedAnchorGenerator',
                      octave_base_scale=4,
@@ -65,6 +66,7 @@ class RotatedAnchorHead(RotatedBaseDenseHead, BBoxTestMixin):
         self.in_channels = in_channels
         self.num_classes = num_classes
         self.feat_channels = feat_channels
+        self.reg_dim = reg_dim
         self.use_sigmoid_cls = loss_cls.get('use_sigmoid', False)
         # TODO better way to determine whether sample or not
         self.sampling = loss_cls['type'] not in [
@@ -104,7 +106,8 @@ class RotatedAnchorHead(RotatedBaseDenseHead, BBoxTestMixin):
         """Initialize layers of the head."""
         self.conv_cls = nn.Conv2d(self.in_channels,
                                   self.num_anchors * self.cls_out_channels, 1)
-        self.conv_reg = nn.Conv2d(self.in_channels, self.num_anchors * 5, 1)
+        self.conv_reg = nn.Conv2d(
+            self.in_channels, self.num_anchors * self.reg_dim, 1)
 
     def forward_single(self, x):
         """Forward feature of a single scale level.
@@ -221,9 +224,12 @@ class RotatedAnchorHead(RotatedBaseDenseHead, BBoxTestMixin):
         anchors = flat_anchors[inside_flags, :]
 
         if self.assign_by_circumhbbox is not None:
-            gt_bboxes_assign = obb2hbb(gt_bboxes, self.assign_by_circumhbbox)
+            if anchors.size(-1) == 4:
+                gt_hbboxes = obb2xyxy(gt_bboxes, self.assign_by_circumhbbox)
+            else:
+                gt_hbboxes = obb2hbb(gt_bboxes, self.assign_by_circumhbbox)
             assign_result = self.assigner.assign(
-                anchors, gt_bboxes_assign, gt_bboxes_ignore,
+                anchors, gt_hbboxes, gt_bboxes_ignore,
                 None if self.sampling else gt_labels)
         else:
             assign_result = self.assigner.assign(
@@ -234,8 +240,8 @@ class RotatedAnchorHead(RotatedBaseDenseHead, BBoxTestMixin):
                                               gt_bboxes)
 
         num_valid_anchors = anchors.shape[0]
-        bbox_targets = torch.zeros_like(anchors)
-        bbox_weights = torch.zeros_like(anchors)
+        bbox_targets = anchors.new_zeros((anchors.size(0), self.reg_dim))
+        bbox_weights = anchors.new_zeros((anchors.size(0), self.reg_dim))
         labels = anchors.new_full((num_valid_anchors, ),
                                   self.num_classes,
                                   dtype=torch.long)
@@ -415,11 +421,11 @@ class RotatedAnchorHead(RotatedBaseDenseHead, BBoxTestMixin):
         loss_cls = self.loss_cls(
             cls_score, labels, label_weights, avg_factor=num_total_samples)
         # regression loss
-        bbox_targets = bbox_targets.reshape(-1, 5)
-        bbox_weights = bbox_weights.reshape(-1, 5)
-        bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
+        bbox_targets = bbox_targets.reshape(-1, self.reg_dim)
+        bbox_weights = bbox_weights.reshape(-1, self.reg_dim)
+        bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, self.reg_dim)
         if self.reg_decoded_bbox:
-            anchors = anchors.reshape(-1, 5)
+            anchors = anchors.reshape(-1, anchors.size(-1))
             bbox_pred = self.bbox_coder.decode(anchors, bbox_pred)
 
         loss_bbox = self.loss_bbox(
@@ -498,7 +504,6 @@ class RotatedAnchorHead(RotatedBaseDenseHead, BBoxTestMixin):
             bbox_weights_list,
             num_total_samples=num_total_samples)
         return dict(loss_cls=losses_cls, loss_bbox=losses_bbox)
-
 
     def aug_test(self, feats, img_metas, rescale=False):
         """Test det bboxes with test time augmentation, can be applied in

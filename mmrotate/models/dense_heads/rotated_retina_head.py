@@ -31,6 +31,7 @@ class RotatedRetinaHead(RotatedAnchorHead):
                  num_classes,
                  in_channels,
                  stacked_convs=4,
+                 reg_dim=5,
                  conv_cfg=None,
                  norm_cfg=None,
                  anchor_generator=dict(
@@ -55,6 +56,7 @@ class RotatedRetinaHead(RotatedAnchorHead):
         super(RotatedRetinaHead, self).__init__(
             num_classes,
             in_channels,
+            reg_dim=reg_dim,
             anchor_generator=anchor_generator,
             init_cfg=init_cfg,
             **kwargs)
@@ -90,7 +92,7 @@ class RotatedRetinaHead(RotatedAnchorHead):
             3,
             padding=1)
         self.retina_reg = nn.Conv2d(
-            self.feat_channels, self.num_anchors * 5, 3, padding=1)
+            self.feat_channels, self.num_anchors * self.reg_dim, 3, padding=1)
 
     def forward_single(self, x):
         """Forward feature of a single scale level.

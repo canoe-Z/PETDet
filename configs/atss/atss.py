@@ -28,6 +28,7 @@ model = dict(
         in_channels=256,
         stacked_convs=4,
         feat_channels=256,
+        assign_by_circumhbbox=angle_version,
         anchor_generator=dict(
             type='RotatedAnchorGenerator',
             ratios=[1.0],
@@ -56,7 +57,7 @@ model = dict(
         assigner=dict(type='RotatedATSSAssigner', topk=9),
         allowed_border=-1,
         pos_weight=-1,
-        #iou_calculator=dict(type='HBBOBBOverlaps2D'),
+        iou_calculator=dict(type='RBboxOverlaps2D'),
         debug=False),
     test_cfg=dict(
         nms_pre=2000,

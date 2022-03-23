@@ -5,11 +5,11 @@ from mmcv.cnn import ConvModule, Scale
 from mmcv.runner import force_fp32
 from mmdet.core import images_to_levels, multi_apply, reduce_mean, unmap
 
-from mmrotate.core import multiclass_nms_rotated, build_assigner, build_sampler, rotated_anchor_inside_flags
-from mmrotate.core.bbox.transforms import obb2hbb
+from mmrotate.core import build_assigner, build_sampler, rotated_anchor_inside_flags
+from mmrotate.core.bbox.transforms import hbb2obb, obb2hbb, obb2xyxy
 from ..builder import ROTATED_HEADS, build_loss
 from .rotated_anchor_head import RotatedAnchorHead
-import numpy as np
+
 
 @ROTATED_HEADS.register_module()
 class RotatedATSSHead(RotatedAnchorHead):
@@ -94,7 +94,7 @@ class RotatedATSSHead(RotatedAnchorHead):
             padding=pred_pad_size)
         self.atss_reg = nn.Conv2d(
             self.feat_channels,
-            self.num_anchors * 5,
+            self.num_anchors * self.reg_dim,
             self.pred_kernel_size,
             padding=pred_pad_size)
         self.atss_centerness = nn.Conv2d(
@@ -119,9 +119,9 @@ class RotatedATSSHead(RotatedAnchorHead):
                     levels, each is a 4D-tensor, the channels number is
                     num_anchors * 4.
         """
-        return multi_apply(self.forward_single, feats)#, self.scales)
+        return multi_apply(self.forward_single, feats)  # , self.scales)
 
-    def forward_single(self, x):#:, scale):
+    def forward_single(self, x):  # :, scale):
         """Forward feature of a single scale level.
         Args:
             x (Tensor): Features of a single scale level.
@@ -144,8 +144,8 @@ class RotatedATSSHead(RotatedAnchorHead):
             reg_feat = reg_conv(reg_feat)
         cls_score = self.atss_cls(cls_feat)
         # we just follow atss, not apply exp in bbox_pred
-        #bbox_pred = scale(self.atss_reg(reg_feat)).float() 
-        bbox_pred=self.atss_reg(reg_feat)
+        #bbox_pred = scale(self.atss_reg(reg_feat)).float()
+        bbox_pred = self.atss_reg(reg_feat)
         centerness = self.atss_centerness(reg_feat)
         return cls_score, bbox_pred, centerness
 
@@ -174,7 +174,7 @@ class RotatedATSSHead(RotatedAnchorHead):
         anchors = anchors.reshape(-1, anchor_dim)
         cls_score = cls_score.permute(0, 2, 3, 1).reshape(
             -1, self.cls_out_channels).contiguous()
-        bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
+        bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, self.reg_dim)
         centerness = centerness.permute(0, 2, 3, 1).reshape(-1)
         bbox_targets = bbox_targets.reshape(-1, 5)
         labels = labels.reshape(-1)
@@ -197,10 +197,11 @@ class RotatedATSSHead(RotatedAnchorHead):
 
             centerness_targets = self.centerness_target(
                 pos_anchors, pos_bbox_targets)
-            # pos_decode_bbox_pred = self.bbox_coder.decode(
-            #     pos_anchors, pos_bbox_pred)
 
-            # print()
+            if not self.reg_decoded_bbox:
+                pos_bbox_targets = self.bbox_coder.encode(
+                    pos_anchors, pos_bbox_targets)
+
             # regression loss
             loss_bbox = self.loss_bbox(
                 pos_bbox_pred,
@@ -295,21 +296,23 @@ class RotatedATSSHead(RotatedAnchorHead):
             loss_bbox=losses_bbox,
             loss_centerness=loss_centerness)
 
-    def centerness_target(self, anchors, gts, eps=0.01):
+    def centerness_target(self, anchors, gts):
         # only calculate pos centerness targets, otherwise there may be nan
-        # if anchors.size(-1) == 4:
-        #     anchors_cx = (anchors[:, 2] + anchors[:, 0]) / 2
-        #     anchors_cy = (anchors[:, 3] + anchors[:, 1]) / 2
-        # elif anchors.size(-1) == 5:
-        anchors_cx = anchors[:, 0]
-        anchors_cy = anchors[:, 1]
+        if anchors.size(-1) == 4:
+            anchors_cx = (anchors[:, 2] + anchors[:, 0]) / 2
+            anchors_cy = (anchors[:, 3] + anchors[:, 1]) / 2
+        elif anchors.size(-1) == 5:
+            anchors_cx = anchors[:, 0]
+            anchors_cy = anchors[:, 1]
+        else:
+            raise NotImplementedError
         anchors_ctr = torch.stack([anchors_cx, anchors_cy], dim=-1)
 
-        decoded_gts = self.bbox_coder.decode(anchors, gts)
         if self.assign_by_circumhbbox is not None:
-            decoded_gts = obb2hbb(decoded_gts, self.assign_by_circumhbbox)
+            gts = obb2hbb(gts, self.assign_by_circumhbbox)
+
         gt_ctr, gt_wh, gt_theta = torch.split(
-            decoded_gts, [2, 2, 1], dim=1)
+            gts, [2, 2, 1], dim=1)
         offset = anchors_ctr - gt_ctr
         cos, sin = torch.cos(gt_theta), torch.sin(gt_theta)
         M = torch.cat([cos, sin, -sin, cos], dim=-1).reshape(
@@ -321,21 +324,13 @@ class RotatedATSSHead(RotatedAnchorHead):
         r_ = W / 2 - offset_x
         t_ = H / 2 + offset_y
         b_ = H / 2 - offset_y
-
-        # distance = torch.stack([l_, r_, t_, b_], dim=1)
-        # assert distance.all() > -eps
-
         left_right = torch.stack([l_, r_], dim=1)
         top_bottom = torch.stack([t_, b_], dim=1)
         centerness = torch.sqrt(
             (left_right.min(dim=-1)[0] / left_right.max(dim=-1)[0]) *
             (top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0]))
-        # for idx, c in enumerate(centerness):
-        #     if torch.isnan(c):
-        #         print(distance[idx])
+
         assert not torch.isnan(centerness).any()
-        # centerness = torch.where(torch.isnan(
-        #     centerness), torch.full_like(centerness, 0), centerness)
 
         return centerness
 
@@ -373,7 +368,7 @@ class RotatedATSSHead(RotatedAnchorHead):
             gt_labels_list = [None for _ in range(num_imgs)]
         (all_anchors, all_labels, all_label_weights, all_bbox_targets,
          all_bbox_weights, pos_inds_list, neg_inds_list) = multi_apply(
-             self._get_target_single,
+             self._get_targets_single,
              anchor_list,
              valid_flag_list,
              num_level_anchors_list,
@@ -402,16 +397,16 @@ class RotatedATSSHead(RotatedAnchorHead):
                 bbox_targets_list, bbox_weights_list, num_total_pos,
                 num_total_neg)
 
-    def _get_target_single(self,
-                           flat_anchors,
-                           valid_flags,
-                           num_level_anchors,
-                           gt_bboxes,
-                           gt_bboxes_ignore,
-                           gt_labels,
-                           img_meta,
-                           label_channels=1,
-                           unmap_outputs=True):
+    def _get_targets_single(self,
+                            flat_anchors,
+                            valid_flags,
+                            num_level_anchors,
+                            gt_bboxes,
+                            gt_bboxes_ignore,
+                            gt_labels,
+                            img_meta,
+                            label_channels=1,
+                            unmap_outputs=True):
         """Compute regression, classification targets for anchors in a single
         image.
         Args:
@@ -458,22 +453,28 @@ class RotatedATSSHead(RotatedAnchorHead):
             num_level_anchors, inside_flags)
 
         if self.assign_by_circumhbbox is not None:
-            gt_bboxes_assign = obb2hbb(gt_bboxes, self.assign_by_circumhbbox)
+            if anchors.size(-1) == 4:
+                gt_hbboxes = obb2xyxy(gt_bboxes, self.assign_by_circumhbbox)
+            elif anchors.size(-1) == 5:
+                gt_hbboxes = obb2hbb(gt_bboxes, self.assign_by_circumhbbox)
             assign_result = self.assigner.assign(anchors, num_level_anchors_inside,
-                                                gt_bboxes_assign, gt_bboxes_ignore,
-                                                gt_labels)
+                                                 gt_hbboxes, gt_bboxes_ignore,
+                                                 gt_labels)
         else:
-            assign_result = self.assigner.assign(anchors, num_level_anchors_inside,
-                                                            gt_bboxes, gt_bboxes_ignore,
-                                                            gt_labels)
+            if anchors.size(-1) == 4:
+                anchors_obboxes = hbb2obb(anchors).reshape(-1,5)
+            elif anchors.size(-1) == 5:
+                anchors_obboxes = anchors
+            assign_result = self.assigner.assign(anchors_obboxes, num_level_anchors_inside,
+                                                 gt_bboxes, gt_bboxes_ignore,
+                                                 gt_labels)
         sampling_result = self.sampler.sample(assign_result, anchors,
                                               gt_bboxes)
 
         num_valid_anchors = anchors.shape[0]
-        # bbox_targets = torch.zeros_like(anchors)
-        # bbox_weights = torch.zeros_like(anchors)
-        bbox_targets = anchors.new_zeros((anchors.size(0), 5))
-        bbox_weights = anchors.new_zeros((anchors.size(0), 5))
+        bbox_dim = sampling_result.pos_gt_bboxes.shape[-1]
+        bbox_targets = anchors.new_zeros((anchors.size(0), bbox_dim))
+        bbox_weights = anchors.new_zeros((anchors.size(0), bbox_dim))
         labels = anchors.new_full((num_valid_anchors, ),
                                   self.num_classes,
                                   dtype=torch.long)
@@ -482,11 +483,7 @@ class RotatedATSSHead(RotatedAnchorHead):
         pos_inds = sampling_result.pos_inds
         neg_inds = sampling_result.neg_inds
         if len(pos_inds) > 0:
-            if self.reg_decoded_bbox:
-                pos_bbox_targets = sampling_result.pos_gt_bboxes
-            else:
-                pos_bbox_targets = self.bbox_coder.encode(
-                    sampling_result.pos_bboxes, sampling_result.pos_gt_bboxes)
+            pos_bbox_targets = sampling_result.pos_gt_bboxes
 
             bbox_targets[pos_inds, :] = pos_bbox_targets
             bbox_weights[pos_inds, :] = 1.0
