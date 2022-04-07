@@ -16,7 +16,7 @@ from mmcv.ops import nms_rotated
 from mmdet.datasets.custom import CustomDataset
 
 from mmrotate.core import obb2poly_np, poly2obb_np
-from mmrotate.core.evaluation import eval_rbbox_map
+from mmrotate.core.evaluation import eval_rbbox_map, eval_rbbox_recalls
 from .builder import ROTATED_DATASETS
 
 
@@ -160,7 +160,7 @@ class DOTADataset(CustomDataset):
                  results,
                  metric='mAP',
                  logger=None,
-                 proposal_nums=(100, 300, 1000),
+                 proposal_nums=(100, 300, 500, 1000, 2000),
                  iou_thr=0.5,
                  scale_ranges=None,
                  nproc=4):
@@ -186,7 +186,7 @@ class DOTADataset(CustomDataset):
         if not isinstance(metric, str):
             assert len(metric) == 1
             metric = metric[0]
-        allowed_metrics = ['mAP']
+        allowed_metrics = ['mAP', 'recall']
         if metric not in allowed_metrics:
             raise KeyError(f'metric {metric} is not supported')
         annotations = [self.get_ann_info(i) for i in range(len(self))]
@@ -202,6 +202,23 @@ class DOTADataset(CustomDataset):
                 logger=logger,
                 nproc=nproc)
             eval_results['mAP'] = mean_ap
+        elif metric == 'recall':
+            assert mmcv.is_list_of(results, np.ndarray)
+            gt_bboxes = []
+            for info in self.data_infos:
+                bboxes = info['ann']['bboxes']
+                gt_bboxes.append(bboxes)
+            if isinstance(iou_thr, float):
+                iou_thr = [iou_thr]
+            recalls = eval_rbbox_recalls(
+                gt_bboxes, results, proposal_nums, iou_thr, logger=logger)
+            for i, num in enumerate(proposal_nums):
+                for j, iou in enumerate(iou_thr):
+                    eval_results[f'recall@{num}@{iou}'] = recalls[i, j]
+            if recalls.shape[1] > 1:
+                ar = recalls.mean(axis=1)
+                for i, num in enumerate(proposal_nums):
+                    eval_results[f'AR@{num}'] = ar[i]
         else:
             raise NotImplementedError
 

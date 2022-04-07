@@ -12,14 +12,19 @@ from .rotated_rpn_head import RotatedRPNHead
 from .sam_reppoints_head import SAMRepPointsHead
 
 from .rotated_atss_head import RotatedATSSHead
+from .rotated_fcos_head import RotatedFCOSHead
 from .oriented_retina_head import OrientedRetinaHead
 from .custom_rpn.rotated_retina_rpn_head import RotatedRetinaRPNHead
 from .custom_rpn.rotated_atss_rpn_head import RotatedATSSRPNHead
+from .custom_rpn.rotated_fcos_rpn_head import RotatedFCOSRPNHead
+
+from .mm_rotated_atss_head import MMRotatedATSSHead
 
 __all__ = [
     'RotatedAnchorHead', 'RotatedRetinaHead', 'RotatedRPNHead',
     'OrientedRPNHead', 'RotatedRetinaRefineHead', 'ODMRefineHead',
     'KFIoURRetinaHead', 'KFIoURRetinaRefineHead', 'KFIoUODMRefineHead',
     'RotatedRepPointsHead', 'SAMRepPointsHead', 'RotatedRetinaRPNHead',
-    'OrientedRetinaHead', 'RotatedATSSHead', 'RotatedATSSRPNHead'
+    'OrientedRetinaHead', 'RotatedATSSHead', 'RotatedATSSRPNHead',
+    'RotatedFCOSHead','RotatedFCOSRPNHead','MMRotatedATSSHead'
 ]

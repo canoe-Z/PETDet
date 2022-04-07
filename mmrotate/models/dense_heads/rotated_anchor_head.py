@@ -39,6 +39,7 @@ class RotatedAnchorHead(RotatedBaseDenseHead, BBoxTestMixin):
                  num_classes,
                  in_channels,
                  feat_channels=256,
+                 start_level=0,
                  reg_dim=5,
                  anchor_generator=dict(
                      type='RotatedAnchorGenerator',
@@ -66,6 +67,7 @@ class RotatedAnchorHead(RotatedBaseDenseHead, BBoxTestMixin):
         self.in_channels = in_channels
         self.num_classes = num_classes
         self.feat_channels = feat_channels
+        self.start_level = start_level
         self.reg_dim = reg_dim
         self.use_sigmoid_cls = loss_cls.get('use_sigmoid', False)
         # TODO better way to determine whether sample or not
@@ -143,7 +145,8 @@ class RotatedAnchorHead(RotatedBaseDenseHead, BBoxTestMixin):
                     scale levels, each is a 4D-tensor, the channels number
                     is num_anchors * 5.
         """
-        return multi_apply(self.forward_single, feats)
+        # print(len(feats))
+        return multi_apply(self.forward_single, feats[self.start_level:])
 
     def get_anchors(self, featmap_sizes, img_metas, device='cuda'):
         """Get anchors according to feature map sizes.
@@ -462,6 +465,9 @@ class RotatedAnchorHead(RotatedBaseDenseHead, BBoxTestMixin):
             dict[str, Tensor]: A dictionary of loss components.
         """
         featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
+        # for featmap in cls_scores:
+        #     print(featmap.size()[-2:])
+        # print(self.anchor_generator.num_levels)
         assert len(featmap_sizes) == self.anchor_generator.num_levels
 
         device = cls_scores[0].device
