@@ -25,6 +25,8 @@ class RotatedATSSHead(RotatedAnchorHead):
                  in_channels,
                  pred_kernel_size=3,
                  stacked_convs=4,
+                 anchor_type='anchor_based',
+                 centerness_branch=True,
                  conv_cfg=None,
                  norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
                  reg_decoded_bbox=True,
@@ -42,8 +44,11 @@ class RotatedATSSHead(RotatedAnchorHead):
                          std=0.01,
                          bias_prob=0.01)),
                  **kwargs):
+        assert anchor_type in ['anchor_free', 'anchor_based']
+        self.anchor_type = anchor_type
         self.pred_kernel_size = pred_kernel_size
         self.stacked_convs = stacked_convs
+        self.centerness_branch = centerness_branch
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         super(RotatedATSSHead, self).__init__(
@@ -119,7 +124,7 @@ class RotatedATSSHead(RotatedAnchorHead):
                     levels, each is a 4D-tensor, the channels number is
                     num_anchors * 4.
         """
-        return multi_apply(self.forward_single, feats)  # , self.scales)
+        return multi_apply(self.forward_single, feats[1:])  # , self.scales)
 
     def forward_single(self, x):  # :, scale):
         """Forward feature of a single scale level.
@@ -146,8 +151,12 @@ class RotatedATSSHead(RotatedAnchorHead):
         # we just follow atss, not apply exp in bbox_pred
         #bbox_pred = scale(self.atss_reg(reg_feat)).float()
         bbox_pred = self.atss_reg(reg_feat)
-        centerness = self.atss_centerness(reg_feat)
-        return cls_score, bbox_pred, centerness
+
+        if self.centerness_branch:
+            centerness = self.atss_centerness(reg_feat)
+            return cls_score, bbox_pred, centerness
+        else:
+            return cls_score, bbox_pred, None
 
     def loss_single(self, anchors, cls_score, bbox_pred, centerness, labels,
                     label_weights, bbox_targets, num_total_samples):
@@ -175,7 +184,8 @@ class RotatedATSSHead(RotatedAnchorHead):
         cls_score = cls_score.permute(0, 2, 3, 1).reshape(
             -1, self.cls_out_channels).contiguous()
         bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, self.reg_dim)
-        centerness = centerness.permute(0, 2, 3, 1).reshape(-1)
+        if self.centerness_branch:
+            centerness = centerness.permute(0, 2, 3, 1).reshape(-1)
         bbox_targets = bbox_targets.reshape(-1, 5)
         labels = labels.reshape(-1)
         label_weights = label_weights.reshape(-1)
@@ -462,7 +472,7 @@ class RotatedATSSHead(RotatedAnchorHead):
                                                  gt_labels)
         else:
             if anchors.size(-1) == 4:
-                anchors_obboxes = hbb2obb(anchors).reshape(-1,5)
+                anchors_obboxes = hbb2obb(anchors).reshape(-1, 5)
             elif anchors.size(-1) == 5:
                 anchors_obboxes = anchors
             assign_result = self.assigner.assign(anchors_obboxes, num_level_anchors_inside,

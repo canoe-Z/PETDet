@@ -67,6 +67,8 @@ class RotatedBaseDenseHead(BaseDenseHead):
         num_levels = len(cls_scores)
 
         featmap_sizes = [cls_scores[i].shape[-2:] for i in range(num_levels)]
+        if not hasattr(self, 'anchor_generator'):
+            self.anchor_generator = self.prior_generator
         mlvl_priors = self.anchor_generator.grid_priors(
             featmap_sizes,
             dtype=cls_scores[0].dtype,

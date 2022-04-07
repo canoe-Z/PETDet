@@ -9,6 +9,7 @@ from mmcv.runner import force_fp32
 
 from mmdet.core import multi_apply, reduce_mean
 from ..builder import ROTATED_HEADS, build_loss
+from mmrotate.core.bbox import rbbox_overlaps
 from .rotated_anchor_free_head import RotatedAnchorFreeHead
 from ...core.bbox.transforms import norm_angle
 INF = 1e8
@@ -61,6 +62,7 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
     def __init__(self,
                  num_classes,
                  in_channels,
+                 start_level=0,
                  angle_version='oc',
                  edge_swap=False,
                  regress_ranges=((-1, 64), (64, 128), (128, 256), (256, 512),
@@ -75,6 +77,14 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                      use_sigmoid=True,
                      gamma=2.0,
                      alpha=0.25,
+                     loss_weight=1.0),
+                 use_vfl=False,
+                 loss_cls_vfl=dict(
+                     type='VarifocalLoss',
+                     use_sigmoid=True,
+                     alpha=0.75,
+                     gamma=2.0,
+                     iou_weighted=True,
                      loss_weight=1.0),
                  loss_bbox=dict(type='IoULoss', loss_weight=1.0),
                  loss_centerness=dict(
@@ -97,6 +107,7 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         self.center_sample_radius = center_sample_radius
         self.norm_on_bbox = norm_on_bbox
         self.centerness_on_reg = centerness_on_reg
+        self.start_level = start_level
         self.angle_version = angle_version
         self.edge_swap = edge_swap
         self.scale_theta = scale_theta
@@ -110,6 +121,9 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
             init_cfg=init_cfg,
             **kwargs)
         self.loss_centerness = build_loss(loss_centerness)
+        self.use_vfl = use_vfl
+        if self.use_vfl:
+            self.loss_cls = build_loss(loss_cls_vfl)
 
     def _init_layers(self):
         """Initialize layers of the head."""
@@ -138,7 +152,7 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                 centernesses (list[Tensor]): centerness for each scale level, \
                     each is a 4D-tensor, the channel number is num_points * 1.
         """
-        return multi_apply(self.forward_single, feats, self.scales,
+        return multi_apply(self.forward_single, feats[self.start_level:], self.scales,
                            self.strides)
 
     def forward_single(self, x, scale, stride):
@@ -249,8 +263,8 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         num_pos = torch.tensor(
             len(pos_inds), dtype=torch.float, device=bbox_preds[0].device)
         num_pos = max(reduce_mean(num_pos), 1.0)
-        loss_cls = self.loss_cls(
-            flatten_cls_scores, flatten_labels, avg_factor=num_pos)
+        # loss_cls = self.loss_cls(
+        #     flatten_cls_scores, flatten_labels, avg_factor=num_pos)
 
         pos_bbox_preds = flatten_bbox_preds[pos_inds]
         pos_centerness = flatten_centerness[pos_inds]
@@ -273,9 +287,30 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                 avg_factor=centerness_denorm)
             loss_centerness = self.loss_centerness(
                 pos_centerness, pos_centerness_targets, avg_factor=num_pos)
+
+            # build IoU-aware cls_score targets
+            if self.use_vfl:
+                iou_targets_ini = rbbox_overlaps(
+                    pos_decoded_bbox_preds.detach(),
+                    pos_decoded_target_preds.detach(),
+                    is_aligned=True).clamp(min=1e-6).view(-1)
+
+                pos_labels = flatten_labels[pos_inds]
+                pos_ious = iou_targets_ini.clone().detach()
+                cls_iou_targets = torch.zeros_like(flatten_cls_scores)
+                cls_iou_targets[pos_inds, pos_labels] = pos_ious
         else:
             loss_bbox = pos_bbox_preds.sum()
             loss_centerness = pos_centerness.sum()
+            if self.use_vfl:
+                cls_iou_targets = torch.zeros_like(flatten_cls_scores)
+
+        if self.use_vfl:
+            loss_cls = self.loss_cls(
+                flatten_cls_scores, cls_iou_targets, avg_factor=num_pos)
+        else:
+            loss_cls = self.loss_cls(
+                flatten_cls_scores, flatten_labels, avg_factor=num_pos)
 
         return dict(
             loss_cls=loss_cls,
@@ -314,6 +349,9 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         # the number of points per img, per lvl
         num_points = [center.size(0) for center in points]
 
+        if gt_labels_list is None:
+            gt_labels_list = [None for _ in range(len(gt_bboxes_list))]
+
         # get labels and bbox_targets of each image
         labels_list, bbox_targets_list = multi_apply(
             self._get_target_single,
@@ -347,7 +385,7 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                            num_points_per_lvl):
         """Compute regression and classification targets for a single image."""
         num_points = points.size(0)
-        num_gts = gt_labels.size(0)
+        num_gts = gt_bboxes.size(0)
         if num_gts == 0:
             return gt_labels.new_full((num_points,), self.num_classes), \
                 gt_bboxes.new_zeros((num_points, 5))
@@ -424,7 +462,10 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         areas[inside_regress_range == 0] = INF
         min_area, min_area_inds = areas.min(dim=1)
 
-        labels = gt_labels[min_area_inds]
+        if gt_labels == None:
+            labels = torch.zeros_like(min_area_inds)  # set as FG in RPN
+        else:
+            labels = gt_labels[min_area_inds]
         labels[min_area == INF] = self.num_classes  # set as BG
         bbox_targets = bbox_targets[range(num_points), min_area_inds]
 

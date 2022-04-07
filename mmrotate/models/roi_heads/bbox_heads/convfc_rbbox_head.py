@@ -222,6 +222,20 @@ class RotatedShared2FCBBoxHead(RotatedConvFCBBoxHead):
             *args,
             **kwargs)
 
+@ROTATED_HEADS.register_module()
+class RotatedShared4Conv1FCBBoxHead(RotatedConvFCBBoxHead):
+
+    def __init__(self, fc_out_channels=1024, *args, **kwargs):
+        super(RotatedShared4Conv1FCBBoxHead, self).__init__(
+            num_shared_convs=4,
+            num_shared_fcs=1,
+            num_cls_convs=0,
+            num_cls_fcs=0,
+            num_reg_convs=0,
+            num_reg_fcs=0,
+            fc_out_channels=fc_out_channels,
+            *args,
+            **kwargs)
 
 @ROTATED_HEADS.register_module()
 class RotatedKFIoUShared2FCBBoxHead(RotatedConvFCBBoxHead):

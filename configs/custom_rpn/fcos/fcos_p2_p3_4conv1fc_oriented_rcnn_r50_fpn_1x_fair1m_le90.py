@@ -1,0 +1,9 @@
+_base_ = ['./fcos_p2_p3_sample2_oriented_rcnn_r50_fpn_1x_fair1m_le90.py']
+
+model = dict(
+    roi_head=dict(
+        bbox_head=dict(
+            type='RotatedShared4Conv1FCBBoxHead'
+        )
+    )
+)

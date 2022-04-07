@@ -1,11 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from mmrotate.core.bbox.transforms import hbb2obb
-
 from ..builder import BBOX_ASSIGNERS
 from ..iou_calculators.builder import build_iou_calculator
-from mmcv.ops import points_in_polygons
 from mmdet.core.bbox.assigners.assign_result import AssignResult
 from mmdet.core.bbox.assigners.base_assigner import BaseAssigner
 
@@ -73,10 +70,6 @@ class RotatedATSSAssigner(BaseAssigner):
 
         # compute iou between all bbox and gt
         assert gt_bboxes.size(1) == 5
-        # if bboxes.size(-1) == 4:
-        #     rbboxes = hbb2obb(bboxes)
-        #     overlaps = self.iou_calculator(rbboxes, gt_bboxes)
-        # elif bboxes.size(-1) == 5:
         overlaps = self.iou_calculator(bboxes, gt_bboxes)
 
         # assign 0 by default
