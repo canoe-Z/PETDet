@@ -12,7 +12,7 @@ from .rotated_anchor_head import RotatedAnchorHead
 
 
 @ROTATED_HEADS.register_module()
-class RotatedATSSHead(RotatedAnchorHead):
+class CustomRotatedATSSHead(RotatedAnchorHead):
     """Bridging the Gap Between Anchor-based and Anchor-free Detection via
     Adaptive Training Sample Selection.
     ATSS head structure is similar with FCOS, however ATSS use anchor boxes
@@ -51,7 +51,7 @@ class RotatedATSSHead(RotatedAnchorHead):
         self.centerness_branch = centerness_branch
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
-        super(RotatedATSSHead, self).__init__(
+        super(CustomRotatedATSSHead, self).__init__(
             num_classes,
             in_channels,
             reg_decoded_bbox=reg_decoded_bbox,

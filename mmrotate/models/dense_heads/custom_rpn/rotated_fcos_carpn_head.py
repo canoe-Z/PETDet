@@ -4,59 +4,46 @@ import torch
 from mmcv.ops import batched_nms
 
 from mmrotate.core import obb2xyxy
+from mmcv.runner import force_fp32
+
 from ...builder import ROTATED_HEADS
-from ..rotated_custom_atss_head import RotatedATSSHead
+from ..rotated_fcos_head import RotatedFCOSHead
 
 
 @ROTATED_HEADS.register_module()
-class RotatedATSSRPNHead(RotatedATSSHead):
-    def __init__(self, version='oc', **kwargs):
-        super(RotatedATSSRPNHead, self).__init__(
-            num_classes=1,
+class RotatedFCOSCARPNHead(RotatedFCOSHead):
+    def __init__(self, num_classes, **kwargs):
+        super(RotatedFCOSCARPNHead, self).__init__(
+            num_classes=num_classes,
             init_cfg=dict(
                 type='Normal',
                 layer='Conv2d',
                 std=0.01,
                 override=dict(
                     type='Normal',
-                    name='atss_cls',
+                    name='conv_cls',
                     std=0.01,
                     bias_prob=0.09)),
             **kwargs)
-        self.version = version
 
+    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'centernesses'))
     def loss(self,
              cls_scores,
              bbox_preds,
              centernesses,
              gt_bboxes,
+             gt_labels,
              img_metas,
              gt_bboxes_ignore=None):
-        """Compute losses of the head.
-
-        Args:
-            cls_scores (list[Tensor]): Box scores for each scale level
-                Has shape (N, num_anchors * num_classes, H, W)
-            bbox_preds (list[Tensor]): Box energies / deltas for each scale
-                level with shape (N, num_anchors * 4, H, W)
-            gt_bboxes (list[Tensor]): Ground truth bboxes for each image with
-                shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
-            img_metas (list[dict]): Meta information of each image, e.g.,
-                image size, scaling factor, etc.
-            gt_bboxes_ignore (None | list[Tensor]): specify which bounding
-                boxes can be ignored when computing the loss.
-
-        Returns:
-            dict[str, Tensor]: A dictionary of loss components.
-        """
-        losses = super(RotatedATSSRPNHead, self).loss(
+        losses = super(RotatedFCOSCARPNHead, self).loss(
             cls_scores,
             bbox_preds,
             centernesses,
             gt_bboxes,
-            None,
+            gt_labels,
             img_metas,
-            gt_bboxes_ignore=gt_bboxes_ignore)
+            gt_bboxes_ignore=gt_bboxes_ignore
+        )
         return dict(
             loss_rpn_cls=losses['loss_cls'], loss_rpn_bbox=losses['loss_bbox'], loss_rpn_centerness=losses['loss_centerness'])
 
@@ -64,7 +51,7 @@ class RotatedATSSRPNHead(RotatedATSSHead):
                            cls_score_list,
                            bbox_pred_list,
                            score_factor_list,
-                           mlvl_anchors,
+                           mlvl_priors,
                            img_meta,
                            cfg,
                            rescale=False,
@@ -105,20 +92,21 @@ class RotatedATSSRPNHead(RotatedATSSHead):
         level_ids = []
         mlvl_scores = []
         mlvl_bbox_preds = []
-        mlvl_valid_anchors = []
+        mlvl_valid_points = []
+
         for level_idx in range(len(cls_score_list)):
             rpn_cls_score = cls_score_list[level_idx]
             rpn_centerness = score_factor_list[level_idx]
             rpn_bbox_pred = bbox_pred_list[level_idx]
             assert rpn_cls_score.size()[-2:] == rpn_bbox_pred.size()[-2:]
             rpn_cls_score = rpn_cls_score.permute(1, 2, 0)
-            rpn_centerness = rpn_centerness.permute(1, 2, 0)
             if self.use_sigmoid_cls:
-                rpn_cls_score = rpn_cls_score.reshape(-1)
+                rpn_cls_score = rpn_cls_score.reshape(-1, self.cls_out_channels)
                 rpn_centerness = rpn_centerness.reshape(-1)
                 scores = rpn_cls_score.sigmoid()
+                max_scores, _ = scores.max(dim=1)
                 centerness = rpn_centerness.sigmoid()
-                scores = (scores*centerness)**0.5
+                scores = (max_scores*centerness)**0.5
             else:
                 rpn_cls_score = rpn_cls_score.reshape(-1, 2)
                 rpn_centerness = rpn_centerness.reshape(-1, 2)
@@ -130,9 +118,9 @@ class RotatedATSSRPNHead(RotatedATSSHead):
                 centerness = rpn_centerness.softmax(dim=1)[:, 0]
                 scores = (scores*centerness)**0.5
             rpn_bbox_pred = rpn_bbox_pred.permute(
-                1, 2, 0).reshape(-1, self.reg_dim)
+                1, 2, 0).reshape(-1, 5)
 
-            anchors = mlvl_anchors[level_idx]
+            points = mlvl_priors[level_idx]
             if cfg.nms_pre > 0 and scores.shape[0] > cfg.nms_pre:
                 # sort is faster than topk
                 # _, topk_inds = scores.topk(cfg.nms_pre)
@@ -140,21 +128,37 @@ class RotatedATSSRPNHead(RotatedATSSHead):
                 topk_inds = rank_inds[:cfg.nms_pre]
                 scores = ranked_scores[:cfg.nms_pre]
                 rpn_bbox_pred = rpn_bbox_pred[topk_inds, :]
-                anchors = anchors[topk_inds, :]
+                points = points[topk_inds, :]
 
             mlvl_scores.append(scores)
             mlvl_bbox_preds.append(rpn_bbox_pred)
-            mlvl_valid_anchors.append(anchors)
+            mlvl_valid_points.append(points)
+            level_ids.append(
+                scores.new_full((scores.size(0), ),
+                                level_idx,
+                                dtype=torch.long))
+
+            if cfg.nms_pre > 0 and scores.shape[0] > cfg.nms_pre:
+                # sort is faster than topk
+                # _, topk_inds = scores.topk(cfg.nms_pre)
+                ranked_scores, rank_inds = scores.sort(descending=True)
+                topk_inds = rank_inds[:cfg.nms_pre]
+                scores = ranked_scores[:cfg.nms_pre]
+                rpn_bbox_pred = rpn_bbox_pred[topk_inds, :]
+                points = points[topk_inds, :]
+            mlvl_scores.append(scores)
+            mlvl_bbox_preds.append(rpn_bbox_pred)
+            mlvl_valid_points.append(points)
             level_ids.append(
                 scores.new_full((scores.size(0), ),
                                 level_idx,
                                 dtype=torch.long))
 
         return self._bbox_post_process(mlvl_scores, mlvl_bbox_preds,
-                                       mlvl_valid_anchors, level_ids, cfg,
+                                       mlvl_valid_points, level_ids, cfg,
                                        img_shape)
 
-    def _bbox_post_process(self, mlvl_scores, mlvl_bboxes, mlvl_valid_anchors,
+    def _bbox_post_process(self, mlvl_scores, mlvl_bboxes, mlvl_valid_points,
                            level_ids, cfg, img_shape, **kwargs):
         """bbox post-processing method.
 
@@ -181,10 +185,10 @@ class RotatedATSSRPNHead(RotatedATSSHead):
                 5-th column is a score between 0 and 1.
         """
         scores = torch.cat(mlvl_scores)
-        anchors = torch.cat(mlvl_valid_anchors)
+        points = torch.cat(mlvl_valid_points)
         rpn_bbox_pred = torch.cat(mlvl_bboxes)
         proposals = self.bbox_coder.decode(
-            anchors, rpn_bbox_pred, max_shape=img_shape)
+            points, rpn_bbox_pred, angle_range=self.angle_version, edge_swap=self.edge_swap, max_shape=img_shape)
         ids = torch.cat(level_ids)
 
         if cfg.min_bbox_size >= 0:
@@ -196,7 +200,7 @@ class RotatedATSSRPNHead(RotatedATSSHead):
                 ids = ids[valid_mask]
 
         if proposals.numel() > 0:
-            hproposals = obb2xyxy(proposals, self.version)
+            hproposals = obb2xyxy(proposals, self.angle_version)
             _, keep = batched_nms(hproposals, scores, ids, cfg.nms)
             dets = torch.cat([proposals, scores[:, None]], dim=1)
             dets = dets[keep]

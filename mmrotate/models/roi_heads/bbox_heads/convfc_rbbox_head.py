@@ -166,6 +166,7 @@ class RotatedConvFCBBoxHead(RotatedBBoxHead):
         return branch_convs, branch_fcs, last_layer_dim
 
     def forward(self, x):
+        #print(x.shape)
         """Forward function."""
         if self.num_shared_convs > 0:
             for conv in self.shared_convs:

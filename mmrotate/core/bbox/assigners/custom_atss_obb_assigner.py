@@ -10,7 +10,7 @@ from ..transforms import obb2poly
 
 
 @ROTATED_BBOX_ASSIGNERS.register_module()
-class ATSSObbAssigner(BaseAssigner):
+class CustomATSSObbAssigner(BaseAssigner):
     """Assign a corresponding gt bbox or background to each bbox.
 
     Each proposals will be assigned with `0` or a positive integer

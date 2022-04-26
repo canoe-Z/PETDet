@@ -16,7 +16,7 @@ INF = 1e8
 
 
 @ROTATED_HEADS.register_module()
-class RotatedFCOSHead(RotatedAnchorFreeHead):
+class RotatedVFFCOSHead(RotatedAnchorFreeHead):
     """Anchor-free head used in `FCOS <https://arxiv.org/abs/1904.01355>`_.
 
     The FCOS head does not use anchor boxes. Instead bounding boxes are
@@ -70,7 +70,6 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                  center_sampling=False,
                  center_sample_radius=1.5,
                  norm_on_bbox=False,
-                 centerness_on_reg=False,
                  scale_theta=True,
                  loss_cls=dict(
                      type='FocalLoss',
@@ -79,6 +78,7 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                      alpha=0.25,
                      loss_weight=1.0),
                  use_vfl=False,
+                 use_ctr=False,
                  loss_cls_vfl=dict(
                      type='VarifocalLoss',
                      use_sigmoid=True,
@@ -87,10 +87,6 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                      iou_weighted=True,
                      loss_weight=1.0),
                  loss_bbox=dict(type='IoULoss', loss_weight=1.0),
-                 loss_centerness=dict(
-                     type='CrossEntropyLoss',
-                     use_sigmoid=True,
-                     loss_weight=1.0),
                  norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
                  init_cfg=dict(
                      type='Normal',
@@ -106,7 +102,6 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         self.center_sampling = center_sampling
         self.center_sample_radius = center_sample_radius
         self.norm_on_bbox = norm_on_bbox
-        self.centerness_on_reg = centerness_on_reg
         self.start_level = start_level
         self.angle_version = angle_version
         self.edge_swap = edge_swap
@@ -120,15 +115,14 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
             norm_cfg=norm_cfg,
             init_cfg=init_cfg,
             **kwargs)
-        self.loss_centerness = build_loss(loss_centerness)
         self.use_vfl = use_vfl
+        self.use_ctr = use_ctr
         if self.use_vfl:
             self.loss_cls = build_loss(loss_cls_vfl)
 
     def _init_layers(self):
         """Initialize layers of the head."""
         super()._init_layers()
-        self.conv_centerness = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
         self.conv_theta = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
         self.scales = nn.ModuleList([Scale(1.0) for _ in self.strides])
         if self.scale_theta:
@@ -171,10 +165,6 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                 predictions of input feature maps.
         """
         cls_score, bbox_pred, cls_feat, reg_feat = super().forward_single(x)
-        if self.centerness_on_reg:
-            centerness = self.conv_centerness(reg_feat)
-        else:
-            centerness = self.conv_centerness(cls_feat)
         # scale the bbox_pred of different level
         # float to avoid overflow when enabling FP16
         bbox_pred = scale(bbox_pred).float()
@@ -191,13 +181,12 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         if self.scale_theta:
             theta_pred = self.scale_t(theta_pred)
         bbox_pred = torch.cat([bbox_pred, theta_pred], dim=1)
-        return cls_score, bbox_pred, centerness
+        return cls_score, bbox_pred
 
-    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'centernesses'))
+    @force_fp32(apply_to=('cls_scores', 'bbox_preds'))
     def loss(self,
              cls_scores,
              bbox_preds,
-             centernesses,
              gt_bboxes,
              gt_labels,
              img_metas,
@@ -224,7 +213,7 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
-        assert len(cls_scores) == len(bbox_preds) == len(centernesses)
+        assert len(cls_scores) == len(bbox_preds)
         featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
         all_level_points = self.prior_generator.grid_priors(
             featmap_sizes,
@@ -243,13 +232,8 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
             bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
             for bbox_pred in bbox_preds
         ]
-        flatten_centerness = [
-            centerness.permute(0, 2, 3, 1).reshape(-1)
-            for centerness in centernesses
-        ]
         flatten_cls_scores = torch.cat(flatten_cls_scores)
         flatten_bbox_preds = torch.cat(flatten_bbox_preds)
-        flatten_centerness = torch.cat(flatten_centerness)
         flatten_labels = torch.cat(labels)
         flatten_bbox_targets = torch.cat(bbox_targets)
         # repeat points to align with bbox_preds
@@ -267,30 +251,43 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         #     flatten_cls_scores, flatten_labels, avg_factor=num_pos)
 
         pos_bbox_preds = flatten_bbox_preds[pos_inds]
-        pos_centerness = flatten_centerness[pos_inds]
         pos_bbox_targets = flatten_bbox_targets[pos_inds]
-        pos_centerness_targets = self.centerness_target(pos_bbox_targets)
-        # centerness weighted iou loss
-        centerness_denorm = max(
-            reduce_mean(pos_centerness_targets.sum().detach()), 1e-6)
-                                               
+
         if len(pos_inds) > 0:
             pos_points = flatten_points[pos_inds]
             pos_decoded_bbox_preds = self.bbox_coder.decode(
                 pos_points, pos_bbox_preds, angle_range=self.angle_version, edge_swap=self.edge_swap)
             pos_decoded_target_preds = self.bbox_coder.decode(
                 pos_points, pos_bbox_targets, angle_range=self.angle_version, edge_swap=self.edge_swap)
-            loss_bbox = self.loss_bbox(
-                pos_decoded_bbox_preds,
-                pos_decoded_target_preds,
-                weight=pos_centerness_targets,
-                avg_factor=centerness_denorm)
-            loss_centerness = self.loss_centerness(
-                pos_centerness, pos_centerness_targets, avg_factor=num_pos)
+
+            if self.use_ctr:
+                pos_centerness_targets = self.centerness_target(
+                    pos_bbox_targets)
+                # centerness weighted iou loss
+                centerness_denorm = max(
+                    reduce_mean(pos_centerness_targets.sum().detach()), 1e-6)
+                loss_bbox = self.loss_bbox(
+                    pos_decoded_bbox_preds,
+                    pos_decoded_target_preds,
+                    weight=pos_centerness_targets,
+                    avg_factor=centerness_denorm)
+            else:
+                iou_targets = rbbox_overlaps(
+                    pos_decoded_bbox_preds,
+                    pos_decoded_target_preds.detach(),
+                    is_aligned=True).clamp(min=1e-6)
+                bbox_weights = iou_targets.clone().detach()
+                bbox_avg_factor = reduce_mean(
+                    bbox_weights.sum()).clamp_(min=1).item()
+                loss_bbox = self.loss_bbox(
+                    pos_decoded_bbox_preds,
+                    pos_decoded_target_preds.detach(),
+                    weight=bbox_weights,
+                    avg_factor=bbox_avg_factor)
 
             # build IoU-aware cls_score targets
             if self.use_vfl:
-                iou_targets_ini = rbbox_overlaps(                     
+                iou_targets_ini = rbbox_overlaps(
                     pos_decoded_bbox_preds.detach(),
                     pos_decoded_target_preds.detach(),
                     is_aligned=True).clamp(min=1e-6).view(-1)
@@ -301,7 +298,6 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                 cls_iou_targets[pos_inds, pos_labels] = pos_ious
         else:
             loss_bbox = pos_bbox_preds.sum()
-            loss_centerness = pos_centerness.sum()
             if self.use_vfl:
                 cls_iou_targets = torch.zeros_like(flatten_cls_scores)
 
@@ -314,8 +310,7 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
 
         return dict(
             loss_cls=loss_cls,
-            loss_bbox=loss_bbox,
-            loss_centerness=loss_centerness)
+            loss_bbox=loss_bbox)
 
     def get_targets(self, points, gt_bboxes_list, gt_labels_list):
         """Compute regression, classification and centerness targets for points
@@ -473,27 +468,6 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         bbox_targets = torch.cat([bbox_targets, theta_targets], dim=1)
         return labels, bbox_targets
 
-    def centerness_target(self, pos_bbox_targets):
-        """Compute centerness targets.
-
-        Args:
-            pos_bbox_targets (Tensor): BBox targets of positive bboxes in shape
-                (num_pos, 4)
-
-        Returns:
-            Tensor: Centerness target.
-        """
-        # only calculate pos centerness targets, otherwise there may be nan
-        left_right = pos_bbox_targets[:, [0, 2]]
-        top_bottom = pos_bbox_targets[:, [1, 3]]
-        if len(left_right) == 0:
-            centerness_targets = left_right[..., 0]
-        else:
-            centerness_targets = (
-                left_right.min(dim=-1)[0] / left_right.max(dim=-1)[0]) * (
-                    top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
-        return torch.sqrt(centerness_targets)
-
     def _get_points_single(self,
                            featmap_size,
                            stride,
@@ -514,3 +488,24 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         points = torch.stack((x.reshape(-1) * stride, y.reshape(-1) * stride),
                              dim=-1) + stride // 2
         return points
+
+    def centerness_target(self, pos_bbox_targets):
+        """Compute centerness targets.
+
+        Args:
+            pos_bbox_targets (Tensor): BBox targets of positive bboxes in shape
+                (num_pos, 4)
+
+        Returns:
+            Tensor: Centerness target.
+        """
+        # only calculate pos centerness targets, otherwise there may be nan
+        left_right = pos_bbox_targets[:, [0, 2]]
+        top_bottom = pos_bbox_targets[:, [1, 3]]
+        if len(left_right) == 0:
+            centerness_targets = left_right[..., 0]
+        else:
+            centerness_targets = (
+                left_right.min(dim=-1)[0] / left_right.max(dim=-1)[0]) * (
+                    top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
+        return torch.sqrt(centerness_targets)

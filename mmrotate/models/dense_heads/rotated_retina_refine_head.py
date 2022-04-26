@@ -187,16 +187,16 @@ class RotatedRetinaRefineHead(RotatedRetinaHead):
         result_list = []
 
         for img_id, _ in enumerate(img_metas):
+            img_meta = img_metas[img_id]
             cls_score_list = [
                 cls_scores[i][img_id].detach() for i in range(num_levels)
             ]
             bbox_pred_list = [
                 bbox_preds[i][img_id].detach() for i in range(num_levels)
             ]
-            img_shape = img_metas[img_id]['img_shape']
-            scale_factor = img_metas[img_id]['scale_factor']
-            proposals = self._get_bboxes_single(cls_score_list, bbox_pred_list,
-                                                rois[img_id], img_shape,
-                                                scale_factor, cfg, rescale)
+            score_factor_list = [None for _ in range(num_levels)]
+            proposals = self._get_bboxes_single(cls_score_list, bbox_pred_list, score_factor_list,
+                                                rois[img_id], img_meta,
+                                                cfg, rescale)
             result_list.append(proposals)
         return result_list

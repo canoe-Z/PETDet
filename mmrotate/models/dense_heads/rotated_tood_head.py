@@ -11,7 +11,7 @@ from mmdet.core import (anchor_inside_flags, build_assigner, distance2bbox,
 from mmdet.core.utils import filter_scores_and_topk
 from mmdet.models.utils import sigmoid_geometric_mean
 from ..builder import HEADS, build_loss
-from .rotated_atss_head import RotatedATSSHead
+from .rotated_custom_atss_head import RotatedATSSHead
 
 
 class TaskDecomposition(nn.Module):
