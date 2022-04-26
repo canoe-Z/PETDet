@@ -12,7 +12,7 @@ from .rotated_retina_refine_head import RotatedRetinaRefineHead
 from .rotated_rpn_head import RotatedRPNHead
 from .sam_reppoints_head import SAMRepPointsHead
 
-from .rotated_atss_head import RotatedATSSHead
+from .rotated_custom_atss_head import RotatedATSSHead
 from .rotated_fcos_head import RotatedFCOSHead
 from .rotated_vf_fcos_head import RotatedVFFCOSHead
 from .oriented_retina_head import OrientedRetinaHead
