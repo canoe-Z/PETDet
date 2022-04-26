@@ -3,7 +3,7 @@ angle_version = 'le90'
 model = dict(
     roi_head=dict(
         type='OrientedDoubleHeadRoIHead',
-        reg_roi_scale_factor=1.0,
+        reg_roi_scale_factor=1.3,
         bbox_head=dict(
             _delete_=True,
             type='RotatedDoubleConvFCBBoxHead',
@@ -22,7 +22,7 @@ model = dict(
                 proj_xy=True,
                 target_means=(.0, .0, .0, .0, .0),
                 target_stds=(0.1, 0.1, 0.2, 0.2, 0.1)),
-            reg_class_agnostic=False,
+            reg_class_agnostic=True,
             loss_cls=dict(
-                type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.5),
-            loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.5))))
+                type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0),
+            loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0))))
