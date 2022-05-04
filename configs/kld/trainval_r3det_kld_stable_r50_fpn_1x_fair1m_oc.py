@@ -1,8 +1,7 @@
 _base_ = [
-    './r3det_r50_fpn_1x_fair1m_oc.py'
+    './r3det_kld_stable_r50_fpn_1x_fair1m_oc.py'
 ]
 
-#fp16 = dict(loss_scale='dynamic')
 evaluation = dict(interval=12, metric='mAP')
 
 # dataset settings

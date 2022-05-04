@@ -128,3 +128,4 @@ mmrotate/.mim
 nohup.out
 queue.sh
 *save_dirs*
+*trainval_dirs*

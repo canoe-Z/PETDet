@@ -5,11 +5,11 @@ from mmcv.ops import batched_nms
 
 from mmrotate.core import obb2xyxy
 from ...builder import ROTATED_HEADS
-from ..rotated_custom_atss_head import RotatedATSSHead
+from ..rotated_custom_atss_head import CustomRotatedATSSHead
 
 
 @ROTATED_HEADS.register_module()
-class RotatedATSSRPNHead(RotatedATSSHead):
+class RotatedATSSRPNHead(CustomRotatedATSSHead):
     def __init__(self, version='oc', **kwargs):
         super(RotatedATSSRPNHead, self).__init__(
             num_classes=1,

@@ -5,10 +5,18 @@ model = dict(
     roi_head=dict(
         bbox_roi_extractor=dict(
             type='CustomRotatedSingleRoIExtractor',
+            fusion_feat='lowest',
+            aggregation='concat',
+            post_process='ca',
             roi_layer=dict(
                 type='RoIAlignRotated',
                 out_size=7,
                 sample_num=2,
                 clockwise=True),
-            out_channels=256,
-            featmap_strides=[4, 8, 16, 32, 64])))
+            out_channels=512,
+            featmap_strides=[4, 8, 16, 32, 64]),
+        bbox_head=dict(
+            in_channels=512
+        )
+    )
+)
