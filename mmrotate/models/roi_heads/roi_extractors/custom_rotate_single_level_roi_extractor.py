@@ -8,6 +8,9 @@ from mmdet.models.roi_heads.roi_extractors.base_roi_extractor import \
     BaseRoIExtractor
 
 from ...builder import ROTATED_ROI_EXTRACTORS
+from ...utils.attention.CoordAttention import CoordAtt
+from ...utils.attention.CBAM import CBAMBlock
+from ...utils.attention.SEAttention import SEAttention
 
 
 @ROTATED_ROI_EXTRACTORS.register_module()
@@ -32,13 +35,27 @@ class CustomRotatedSingleRoIExtractor(BaseRoIExtractor):
                  out_channels,
                  featmap_strides,
                  finest_scale=56,
-                 sum_low_feat=True,
+                 current_feat='current',
+                 fusion_feat='lower',
+                 aggregation='sum',
+                 post_process=None,
                  init_cfg=None):
         super(CustomRotatedSingleRoIExtractor,
               self).__init__(roi_layer, out_channels, featmap_strides,
                              init_cfg)
         self.finest_scale = finest_scale
-        self.sum_low_feat = sum_low_feat
+        self.current_feat = current_feat
+        self.fusion_feat = fusion_feat
+        self.aggregation = aggregation
+        self.post_process = post_process
+        if self.post_process == 'CA':
+            self.attention = CoordAtt(
+                self.out_channels, self.out_channels, reduction=32)
+        elif self.post_process == 'CBAM':
+            self.attention = CBAMBlock(self.out_channels, reduction=16,
+                             kernel_size=7)
+        elif self.post_process=='SE':
+            self.attention = SEAttention(self.out_channels,reduction=8)
         self.fp16_enabled = False
 
     def build_roi_layers(self, layer_cfg, featmap_strides):
@@ -54,7 +71,7 @@ class CustomRotatedSingleRoIExtractor(BaseRoIExtractor):
                 coordinate system.
 
         Returns:
-            nn.ModuleList: The RoI extractor modules for each level feature
+            nn.ModuleList: The RoI extractor modules for each level feature \
                 map.
         """
 
@@ -101,9 +118,12 @@ class CustomRotatedSingleRoIExtractor(BaseRoIExtractor):
         Returns:
             torch.Tensor: Scaled RoI features.
         """
-        out_size = self.roi_layers[0].out_size
+        if isinstance(self.roi_layers[0], ops.RiRoIAlignRotated):
+            out_size = nn.modules.utils._pair(self.roi_layers[0].out_size)
+        else:
+            out_size = self.roi_layers[0].output_size
         num_levels = len(feats)-1
-        expand_dims = (-1, self.out_channels * out_size * out_size)
+        expand_dims = (-1, self.out_channels * out_size[0] * out_size[1])
         if torch.onnx.is_in_onnx_export():
             # Work around to export mask-rcnn to onnx
             roi_feats = rois[:, :1].clone().detach()
@@ -113,7 +133,7 @@ class CustomRotatedSingleRoIExtractor(BaseRoIExtractor):
             roi_feats = roi_feats * 0
         else:
             roi_feats = feats[0].new_zeros(
-                rois.size(0), self.out_channels, out_size, out_size)
+                rois.size(0), self.out_channels, *out_size)
         # TODO: remove this when parrots supports
         if torch.__version__ == 'parrots':
             roi_feats.requires_grad = True
@@ -123,7 +143,7 @@ class CustomRotatedSingleRoIExtractor(BaseRoIExtractor):
                 return roi_feats
             return self.roi_layers[0](feats[0], rois)
 
-        target_lvls = self.map_roi_levels(rois, num_levels)
+        target_lvls = self.map_roi_levels(rois, num_levels)+1
         if roi_scale_factor is not None:
             rois = self.roi_rescale(rois, roi_scale_factor)
         for i in range(num_levels):
@@ -131,13 +151,27 @@ class CustomRotatedSingleRoIExtractor(BaseRoIExtractor):
             inds = mask.nonzero(as_tuple=False).squeeze(1)
             if inds.numel() > 0:
                 rois_ = rois[inds]
-                roi_feats_t = self.roi_layers[i](feats[i], rois_)
+                if self.current_feat == 'current':
+                    roi_feats_c = self.roi_layers[i](feats[i], rois_)
+                elif self.current_feat == 'lower':
+                    roi_feats_c = self.roi_layers[i-1](feats[i-1], rois_)
 
-                if self.sum_low_feat:
-                    if i != num_levels:
-                        roi_feats_t_high = self.roi_layers[i +
-                                                           1](feats[i+1], rois_)
-                        roi_feats_t = 0.5*roi_feats_t+0.5*roi_feats_t_high
+                if self.fusion_feat is not None:
+                    if self.fusion_feat == 'lower':
+                        roi_feats_f = self.roi_layers[i-1](feats[i-1], rois_)
+                    elif self.fusion_feat == 'lowest':
+                        roi_feats_f = self.roi_layers[0](feats[0], rois_)
+
+                    if self.aggregation == 'sum':
+                        roi_feats_t = 0.5*roi_feats_c+0.5*roi_feats_f
+                    elif self.aggregation == 'concat':
+                        roi_feats_t = torch.cat([roi_feats_c, roi_feats_f], 1)
+                else:
+                    roi_feats_t = self.roi_layers[i](feats[i], rois_)
+
+                if self.post_process is not None:
+                    roi_feats_t = self.attention(roi_feats_t)
+
                 roi_feats[inds] = roi_feats_t
             else:
                 # Sometimes some pyramid levels will not be used for RoI
@@ -149,6 +183,7 @@ class CustomRotatedSingleRoIExtractor(BaseRoIExtractor):
                 roi_feats += sum(
                     x.view(-1)[0]
                     for x in self.parameters()) * 0. + feats[i].sum() * 0.
+
         return roi_feats
 
     def roi_rescale(self, rois, scale_factor):
