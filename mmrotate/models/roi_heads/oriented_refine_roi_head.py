@@ -240,7 +240,7 @@ class OrientedRefineRoIHead(OrientedCascadeRoIHead):
         det_bboxes = []
         det_labels = []
         for i in range(num_imgs):
-            det_bbox, det_label, _ = self.bbox_head[-1].get_bboxes(
+            det_bbox, det_label = self.bbox_head[-1].get_bboxes(
                 rois[i],
                 cls_score[i],
                 bbox_pred[i],

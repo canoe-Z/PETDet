@@ -107,11 +107,18 @@ model = dict(
         rpn=dict(
             assigner=dict(
                 type='MaxIoUAssigner',
-                pos_iou_thr=0.5,
-                neg_iou_thr=0.4,
-                min_pos_iou=0,
+                pos_iou_thr=0.7,
+                neg_iou_thr=0.3,
+                min_pos_iou=0.3,
+                match_low_quality=True,
                 ignore_iof_thr=-1),
-            allowed_border=-1,
+            sampler=dict(
+                type='RandomSampler',
+                num=256,
+                pos_fraction=0.5,
+                neg_pos_ub=-1,
+                add_gt_as_proposals=False),
+            allowed_border=0,
             pos_weight=-1,
             debug=False),
         rpn_proposal=dict(
@@ -140,9 +147,9 @@ model = dict(
             dict(
                 assigner=dict(
                     type='MaxIoUAssigner',
-                    pos_iou_thr=0.5,
-                    neg_iou_thr=0.5,
-                    min_pos_iou=0.5,
+                    pos_iou_thr=0.6,
+                    neg_iou_thr=0.6,
+                    min_pos_iou=0.6,
                     match_low_quality=False,
                     iou_calculator=dict(type='RBboxOverlaps2D'),
                     ignore_iof_thr=-1),
@@ -185,17 +192,9 @@ train_pipeline = [
     dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels'])
 ]
 data = dict(
-    samples_per_gpu=4,
-    workers_per_gpu=2,
     train=dict(pipeline=train_pipeline, version=angle_version),
     val=dict(version=angle_version),
     test=dict(version=angle_version))
 
 optimizer = dict(lr=0.02)
-lr_config = dict(
-    policy='step',
-    warmup='linear',
-    warmup_iters=2000,
-    warmup_ratio=0.0005,
-    step=[8, 11])
 fp16 = dict(loss_scale='dynamic')

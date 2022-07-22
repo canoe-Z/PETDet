@@ -415,9 +415,9 @@ class RotatedBBoxHead(BaseModule):
         if cfg is None:
             return bboxes, scores
         else:
-            det_bboxes, det_labels,keep= multiclass_nms_rotated(
-                bboxes, scores, cfg.score_thr, cfg.nms, cfg.max_per_img,return_inds=True)
-            return det_bboxes, det_labels,keep
+            det_bboxes, det_labels = multiclass_nms_rotated(
+                bboxes, scores, cfg.score_thr, cfg.nms, cfg.max_per_img)
+            return det_bboxes, det_labels
 
     @force_fp32(apply_to=('bbox_preds', ))
     def refine_bboxes(self, rois, labels, bbox_preds, pos_is_gts, img_metas):

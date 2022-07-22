@@ -81,9 +81,7 @@ def multiclass_nms_rotated(multi_bboxes,
     labels = labels[keep]
 
     if return_inds:
-        inds=torch.div(inds, num_classes, rounding_mode='floor')
-        #print(inds[keep])
-        return torch.cat([bboxes, scores[:, None]], 1), labels, inds[keep]
+        return torch.cat([bboxes, scores[:, None]], 1), labels, keep
     else:
         return torch.cat([bboxes, scores[:, None]], 1), labels
 

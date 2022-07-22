@@ -51,7 +51,7 @@ def bbox_mapping_back(bboxes,
     return new_bboxes.view(bboxes.shape)
 
 
-def rbbox2result(bboxes, labels, num_classes, feats=None):
+def rbbox2result(bboxes, labels, num_classes):
     """Convert detection results to a list of numpy arrays.
 
     Args:
@@ -67,11 +67,7 @@ def rbbox2result(bboxes, labels, num_classes, feats=None):
     else:
         bboxes = bboxes.cpu().numpy()
         labels = labels.cpu().numpy()
-        if feats is None:
-            return [bboxes[labels == i, :] for i in range(num_classes)]
-        else:
-            feats = feats.cpu().numpy()
-            return [bboxes[labels == i, :] for i in range(num_classes)],[bboxes[labels == i, :] for i in range(num_classes)]
+        return [bboxes[labels == i, :] for i in range(num_classes)]
 
 
 def rbbox2roi(bbox_list):
@@ -825,9 +821,9 @@ def get_best_begin_point_single(coordinate):
     force_flag = 0
     for i in range(4):
         temp_force = cal_line_length(combine[i][0], dst_coordinate[0]) \
-            + cal_line_length(combine[i][1], dst_coordinate[1]) \
-            + cal_line_length(combine[i][2], dst_coordinate[2]) \
-            + cal_line_length(combine[i][3], dst_coordinate[3])
+                     + cal_line_length(combine[i][1], dst_coordinate[1]) \
+                     + cal_line_length(combine[i][2], dst_coordinate[2]) \
+                     + cal_line_length(combine[i][3], dst_coordinate[3])
         if temp_force < force:
             force = temp_force
             force_flag = i
