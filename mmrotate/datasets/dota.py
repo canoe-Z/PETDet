@@ -90,7 +90,7 @@ class DOTADataset(CustomDataset):
                 gt_labels_ignore = []
                 gt_polygons_ignore = []
 
-                if os.path.getsize(ann_file) == 0:
+                if os.path.getsize(ann_file) == 0 and self.filter_empty_gt:
                     continue
 
                 with open(ann_file) as f:
@@ -150,7 +150,8 @@ class DOTADataset(CustomDataset):
         """Filter images without ground truths."""
         valid_inds = []
         for i, data_info in enumerate(self.data_infos):
-            if data_info['ann']['labels'].size > 0:
+            if (not self.filter_empty_gt
+                    or data_info['ann']['labels'].size > 0):
                 valid_inds.append(i)
         return valid_inds
 

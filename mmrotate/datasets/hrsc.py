@@ -94,7 +94,7 @@ class HRSCDataset(CustomDataset):
             data_info = {}
 
             filename = osp.join(self.img_subdir, f'{img_id}.bmp')
-            data_info['filename'] = filename
+            data_info['filename'] = f'{img_id}.bmp'
             xml_path = osp.join(self.img_prefix, self.ann_subdir,
                                 f'{img_id}.xml')
             tree = ET.parse(xml_path)
@@ -198,19 +198,21 @@ class HRSCDataset(CustomDataset):
         """Filter images without ground truths."""
         valid_inds = []
         for i, data_info in enumerate(self.data_infos):
-            if data_info['ann']['labels'].size > 0:
+            if (not self.filter_empty_gt
+                    or data_info['ann']['labels'].size > 0):
                 valid_inds.append(i)
         return valid_inds
 
-    def evaluate(self,
-                 results,
-                 metric='mAP',
-                 logger=None,
-                 proposal_nums=(100, 300, 1000),
-                 iou_thr=0.5,
-                 scale_ranges=None,
-                 use_07_metric=True,
-                 nproc=4):
+    def evaluate(
+            self,
+            results,
+            metric='mAP',
+            logger=None,
+            proposal_nums=(100, 300, 1000),
+            iou_thr=[0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95],
+            scale_ranges=None,
+            use_07_metric=True,
+            nproc=4):
         """Evaluate the dataset.
 
         Args:

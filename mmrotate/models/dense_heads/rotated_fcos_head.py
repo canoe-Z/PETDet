@@ -1,24 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import warnings
 
 import torch
 import torch.nn as nn
-import numpy as np
 from mmcv.cnn import Scale
 from mmcv.runner import force_fp32
-
 from mmdet.core import multi_apply, reduce_mean
+
+from mmrotate.core import build_bbox_coder, multiclass_nms_rotated
 from ..builder import ROTATED_HEADS, build_loss
-from mmrotate.core.bbox import rbbox_overlaps
 from .rotated_anchor_free_head import RotatedAnchorFreeHead
-from ...core.bbox.transforms import norm_angle
+
 INF = 1e8
 
 
 @ROTATED_HEADS.register_module()
 class RotatedFCOSHead(RotatedAnchorFreeHead):
     """Anchor-free head used in `FCOS <https://arxiv.org/abs/1904.01355>`_.
-
     The FCOS head does not use anchor boxes. Instead bounding boxes are
     predicted at each pixel and a centerness measure is used to suppress
     low-quality predictions.
@@ -26,7 +23,6 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
     tricks used in official repo, which will bring remarkable mAP gains
     of up to 4.9. Please see https://github.com/tianzhi0549/FCOS for
     more detail.
-
     Args:
         num_classes (int): Number of categories excluding the background
             category.
@@ -42,51 +38,47 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         centerness_on_reg (bool): If true, position centerness on the
             regress branch. Please refer to https://github.com/tianzhi0549/FCOS/issues/89#issuecomment-516877042.
             Default: False.
+        separate_angle (bool): If true, angle prediction is separated from
+            bbox regression loss. Default: False.
+        scale_angle (bool): If true, add scale to angle pred branch. Default: True.
+        h_bbox_coder (dict): Config of horzional bbox coder, only used when separate_angle is True.
         conv_bias (bool | str): If specified as `auto`, it will be decided by the
             norm_cfg. Bias of conv will be set as True if `norm_cfg` is None, otherwise
             False. Default: "auto".
         loss_cls (dict): Config of classification loss.
         loss_bbox (dict): Config of localization loss.
+        loss_angle (dict): Config of angle loss, only used when separate_angle is True.
         loss_centerness (dict): Config of centerness loss.
         norm_cfg (dict): dictionary to construct and config norm layer.
             Default: norm_cfg=dict(type='GN', num_groups=32, requires_grad=True).
         init_cfg (dict or list[dict], optional): Initialization config dict.
-
     Example:
-        >>> self = FCOSHead(11, 7)
+        >>> self = RotatedFCOSHead(11, 7)
         >>> feats = [torch.rand(1, 7, s, s) for s in [4, 8, 16, 32, 64]]
-        >>> cls_score, bbox_pred, centerness = self.forward(feats)
+        >>> cls_score, bbox_pred, angle_pred, centerness = self.forward(feats)
         >>> assert len(cls_score) == len(self.scales)
     """  # noqa: E501
 
     def __init__(self,
                  num_classes,
                  in_channels,
-                 start_level=0,
-                 angle_version='oc',
-                 edge_swap=False,
                  regress_ranges=((-1, 64), (64, 128), (128, 256), (256, 512),
                                  (512, INF)),
                  center_sampling=False,
                  center_sample_radius=1.5,
                  norm_on_bbox=False,
                  centerness_on_reg=False,
-                 scale_theta=True,
+                 separate_angle=False,
+                 scale_angle=True,
+                 h_bbox_coder=dict(type='DistancePointBBoxCoder'),
                  loss_cls=dict(
                      type='FocalLoss',
                      use_sigmoid=True,
                      gamma=2.0,
                      alpha=0.25,
                      loss_weight=1.0),
-                 use_vfl=False,
-                 loss_cls_vfl=dict(
-                     type='VarifocalLoss',
-                     use_sigmoid=True,
-                     alpha=0.75,
-                     gamma=2.0,
-                     iou_weighted=True,
-                     loss_weight=1.0),
                  loss_bbox=dict(type='IoULoss', loss_weight=1.0),
+                 loss_angle=dict(type='L1Loss', loss_weight=1.0),
                  loss_centerness=dict(
                      type='CrossEntropyLoss',
                      use_sigmoid=True,
@@ -107,40 +99,36 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         self.center_sample_radius = center_sample_radius
         self.norm_on_bbox = norm_on_bbox
         self.centerness_on_reg = centerness_on_reg
-        self.start_level = start_level
-        self.angle_version = angle_version
-        self.edge_swap = edge_swap
-        self.scale_theta = scale_theta
+        self.separate_angle = separate_angle
+        self.is_scale_angle = scale_angle
         super().__init__(
             num_classes,
             in_channels,
-            reg_dim=4,
             loss_cls=loss_cls,
             loss_bbox=loss_bbox,
             norm_cfg=norm_cfg,
             init_cfg=init_cfg,
             **kwargs)
         self.loss_centerness = build_loss(loss_centerness)
-        self.use_vfl = use_vfl
-        if self.use_vfl:
-            self.loss_cls = build_loss(loss_cls_vfl)
+        if self.separate_angle:
+            self.loss_angle = build_loss(loss_angle)
+            self.h_bbox_coder = build_bbox_coder(h_bbox_coder)
+        # Angle predict length
 
     def _init_layers(self):
         """Initialize layers of the head."""
         super()._init_layers()
         self.conv_centerness = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
-        self.conv_theta = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
+        self.conv_angle = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
         self.scales = nn.ModuleList([Scale(1.0) for _ in self.strides])
-        if self.scale_theta:
-            self.scale_t = Scale(1.0)
+        if self.is_scale_angle:
+            self.scale_angle = Scale(1.0)
 
     def forward(self, feats):
         """Forward features from the upstream network.
-
         Args:
             feats (tuple[Tensor]): Features from the upstream network, each is
                 a 4D-tensor.
-
         Returns:
             tuple:
                 cls_scores (list[Tensor]): Box scores for each scale level, \
@@ -149,10 +137,12 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                 bbox_preds (list[Tensor]): Box energies / deltas for each \
                     scale level, each is a 4D-tensor, the channel number is \
                     num_points * 4.
+                angle_preds (list[Tensor]): Box angle for each scale level, \
+                    each is a 4D-tensor, the channel number is num_points * 1.
                 centernesses (list[Tensor]): centerness for each scale level, \
                     each is a 4D-tensor, the channel number is num_points * 1.
         """
-        return multi_apply(self.forward_single, feats[self.start_level:], self.scales,
+        return multi_apply(self.forward_single, feats, self.scales,
                            self.strides)
 
     def forward_single(self, x, scale, stride):
@@ -165,10 +155,9 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
             stride (int): The corresponding stride for feature maps, only
                 used to normalize the bbox prediction when self.norm_on_bbox
                 is True.
-
         Returns:
-            tuple: scores for each class, bbox predictions and centerness \
-                predictions of input feature maps.
+            tuple: scores for each class, bbox predictions, angle predictions \
+                and centerness predictions of input feature maps.
         """
         cls_score, bbox_pred, cls_feat, reg_feat = super().forward_single(x)
         if self.centerness_on_reg:
@@ -187,23 +176,23 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                 bbox_pred *= stride
         else:
             bbox_pred = bbox_pred.exp()
-        theta_pred = self.conv_theta(reg_feat)
-        if self.scale_theta:
-            theta_pred = self.scale_t(theta_pred)
-        bbox_pred = torch.cat([bbox_pred, theta_pred], dim=1)
-        return cls_score, bbox_pred, centerness
+        angle_pred = self.conv_angle(reg_feat)
+        if self.is_scale_angle:
+            angle_pred = self.scale_angle(angle_pred).float()
+        return cls_score, bbox_pred, angle_pred, centerness
 
-    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'centernesses'))
+    @force_fp32(
+        apply_to=('cls_scores', 'bbox_preds', 'angle_preds', 'centernesses'))
     def loss(self,
              cls_scores,
              bbox_preds,
+             angle_preds,
              centernesses,
              gt_bboxes,
              gt_labels,
              img_metas,
              gt_bboxes_ignore=None):
         """Compute loss of the head.
-
         Args:
             cls_scores (list[Tensor]): Box scores for each scale level,
                 each is a 4D-tensor, the channel number is
@@ -211,6 +200,8 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
             bbox_preds (list[Tensor]): Box energies / deltas for each scale
                 level, each is a 4D-tensor, the channel number is
                 num_points * 4.
+            angle_preds (list[Tensor]): Box angle for each scale level, \
+                each is a 4D-tensor, the channel number is num_points * 1.
             centernesses (list[Tensor]): centerness for each scale level, each
                 is a 4D-tensor, the channel number is num_points * 1.
             gt_bboxes (list[Tensor]): Ground truth bboxes for each image with
@@ -220,18 +211,18 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                 image size, scaling factor, etc.
             gt_bboxes_ignore (None | list[Tensor]): specify which bounding
                 boxes can be ignored when computing the loss.
-
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
-        assert len(cls_scores) == len(bbox_preds) == len(centernesses)
+        assert len(cls_scores) == len(bbox_preds) \
+               == len(angle_preds) == len(centernesses)
         featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
         all_level_points = self.prior_generator.grid_priors(
             featmap_sizes,
             dtype=bbox_preds[0].dtype,
             device=bbox_preds[0].device)
-        labels, bbox_targets = self.get_targets(all_level_points, gt_bboxes,
-                                                gt_labels)
+        labels, bbox_targets, angle_targets = self.get_targets(
+            all_level_points, gt_bboxes, gt_labels)
 
         num_imgs = cls_scores[0].size(0)
         # flatten cls_scores, bbox_preds and centerness
@@ -240,8 +231,12 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
             for cls_score in cls_scores
         ]
         flatten_bbox_preds = [
-            bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
+            bbox_pred.permute(0, 2, 3, 1).reshape(-1, 4)
             for bbox_pred in bbox_preds
+        ]
+        flatten_angle_preds = [
+            angle_pred.permute(0, 2, 3, 1).reshape(-1, 1)
+            for angle_pred in angle_preds
         ]
         flatten_centerness = [
             centerness.permute(0, 2, 3, 1).reshape(-1)
@@ -249,9 +244,11 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         ]
         flatten_cls_scores = torch.cat(flatten_cls_scores)
         flatten_bbox_preds = torch.cat(flatten_bbox_preds)
+        flatten_angle_preds = torch.cat(flatten_angle_preds)
         flatten_centerness = torch.cat(flatten_centerness)
         flatten_labels = torch.cat(labels)
         flatten_bbox_targets = torch.cat(bbox_targets)
+        flatten_angle_targets = torch.cat(angle_targets)
         # repeat points to align with bbox_preds
         flatten_points = torch.cat(
             [points.repeat(num_imgs, 1) for points in all_level_points])
@@ -263,59 +260,60 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         num_pos = torch.tensor(
             len(pos_inds), dtype=torch.float, device=bbox_preds[0].device)
         num_pos = max(reduce_mean(num_pos), 1.0)
-        # loss_cls = self.loss_cls(
-        #     flatten_cls_scores, flatten_labels, avg_factor=num_pos)
+        loss_cls = self.loss_cls(
+            flatten_cls_scores, flatten_labels, avg_factor=num_pos)
 
         pos_bbox_preds = flatten_bbox_preds[pos_inds]
+        pos_angle_preds = flatten_angle_preds[pos_inds]
         pos_centerness = flatten_centerness[pos_inds]
         pos_bbox_targets = flatten_bbox_targets[pos_inds]
+        pos_angle_targets = flatten_angle_targets[pos_inds]
         pos_centerness_targets = self.centerness_target(pos_bbox_targets)
         # centerness weighted iou loss
         centerness_denorm = max(
             reduce_mean(pos_centerness_targets.sum().detach()), 1e-6)
-                                               
+
         if len(pos_inds) > 0:
             pos_points = flatten_points[pos_inds]
-            pos_decoded_bbox_preds = self.bbox_coder.decode(
-                pos_points, pos_bbox_preds, angle_range=self.angle_version, edge_swap=self.edge_swap)
-            pos_decoded_target_preds = self.bbox_coder.decode(
-                pos_points, pos_bbox_targets, angle_range=self.angle_version, edge_swap=self.edge_swap)
+            if self.separate_angle:
+                bbox_coder = self.h_bbox_coder
+            else:
+                bbox_coder = self.bbox_coder
+                pos_bbox_preds = torch.cat([pos_bbox_preds, pos_angle_preds],
+                                           dim=-1)
+                pos_bbox_targets = torch.cat(
+                    [pos_bbox_targets, pos_angle_targets], dim=-1)
+            pos_decoded_bbox_preds = bbox_coder.decode(pos_points,
+                                                       pos_bbox_preds)
+            pos_decoded_target_preds = bbox_coder.decode(
+                pos_points, pos_bbox_targets)
             loss_bbox = self.loss_bbox(
                 pos_decoded_bbox_preds,
                 pos_decoded_target_preds,
                 weight=pos_centerness_targets,
                 avg_factor=centerness_denorm)
+            if self.separate_angle:
+                loss_angle = self.loss_angle(
+                    pos_angle_preds, pos_angle_targets, avg_factor=num_pos)
             loss_centerness = self.loss_centerness(
                 pos_centerness, pos_centerness_targets, avg_factor=num_pos)
-
-            # build IoU-aware cls_score targets
-            if self.use_vfl:
-                iou_targets_ini = rbbox_overlaps(                     
-                    pos_decoded_bbox_preds.detach(),
-                    pos_decoded_target_preds.detach(),
-                    is_aligned=True).clamp(min=1e-6).view(-1)
-
-                pos_labels = flatten_labels[pos_inds]
-                pos_ious = iou_targets_ini.clone().detach()
-                cls_iou_targets = torch.zeros_like(flatten_cls_scores)
-                cls_iou_targets[pos_inds, pos_labels] = pos_ious
         else:
             loss_bbox = pos_bbox_preds.sum()
             loss_centerness = pos_centerness.sum()
-            if self.use_vfl:
-                cls_iou_targets = torch.zeros_like(flatten_cls_scores)
+            if self.separate_angle:
+                loss_angle = pos_angle_preds.sum()
 
-        if self.use_vfl:
-            loss_cls = self.loss_cls(
-                flatten_cls_scores, cls_iou_targets, avg_factor=num_pos)
+        if self.separate_angle:
+            return dict(
+                loss_cls=loss_cls,
+                loss_bbox=loss_bbox,
+                loss_angle=loss_angle,
+                loss_centerness=loss_centerness)
         else:
-            loss_cls = self.loss_cls(
-                flatten_cls_scores, flatten_labels, avg_factor=num_pos)
-
-        return dict(
-            loss_cls=loss_cls,
-            loss_bbox=loss_bbox,
-            loss_centerness=loss_centerness)
+            return dict(
+                loss_cls=loss_cls,
+                loss_bbox=loss_bbox,
+                loss_centerness=loss_centerness)
 
     def get_targets(self, points, gt_bboxes_list, gt_labels_list):
         """Compute regression, classification and centerness targets for points
@@ -328,12 +326,13 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                 each has shape (num_gt, 4).
             gt_labels_list (list[Tensor]): Ground truth labels of each box,
                 each has shape (num_gt,).
-
         Returns:
             tuple:
                 concat_lvl_labels (list[Tensor]): Labels of each level. \
                 concat_lvl_bbox_targets (list[Tensor]): BBox targets of each \
                     level.
+                concat_lvl_angle_targets (list[Tensor]): Angle targets of \
+                    each level.
         """
         assert len(points) == len(self.regress_ranges)
         num_levels = len(points)
@@ -349,11 +348,8 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         # the number of points per img, per lvl
         num_points = [center.size(0) for center in points]
 
-        if gt_labels_list is None:
-            gt_labels_list = [None for _ in range(len(gt_bboxes_list))]
-
         # get labels and bbox_targets of each image
-        labels_list, bbox_targets_list = multi_apply(
+        labels_list, bbox_targets_list, angle_targets_list = multi_apply(
             self._get_target_single,
             gt_bboxes_list,
             gt_labels_list,
@@ -367,28 +363,39 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
             bbox_targets.split(num_points, 0)
             for bbox_targets in bbox_targets_list
         ]
+        angle_targets_list = [
+            angle_targets.split(num_points, 0)
+            for angle_targets in angle_targets_list
+        ]
 
         # concat per level image
         concat_lvl_labels = []
         concat_lvl_bbox_targets = []
+        concat_lvl_angle_targets = []
         for i in range(num_levels):
             concat_lvl_labels.append(
                 torch.cat([labels[i] for labels in labels_list]))
             bbox_targets = torch.cat(
                 [bbox_targets[i] for bbox_targets in bbox_targets_list])
+            angle_targets = torch.cat(
+                [angle_targets[i] for angle_targets in angle_targets_list])
             if self.norm_on_bbox:
-                bbox_targets[:, :4] = bbox_targets[:, :4] / self.strides[i]
+                bbox_targets = bbox_targets / self.strides[i]
             concat_lvl_bbox_targets.append(bbox_targets)
-        return concat_lvl_labels, concat_lvl_bbox_targets
+            concat_lvl_angle_targets.append(angle_targets)
+        return (concat_lvl_labels, concat_lvl_bbox_targets,
+                concat_lvl_angle_targets)
 
     def _get_target_single(self, gt_bboxes, gt_labels, points, regress_ranges,
                            num_points_per_lvl):
-        """Compute regression and classification targets for a single image."""
+        """Compute regression, classification and angle targets for a single
+        image."""
         num_points = points.size(0)
-        num_gts = gt_bboxes.size(0)
+        num_gts = gt_labels.size(0)
         if num_gts == 0:
             return gt_labels.new_full((num_points,), self.num_classes), \
-                gt_bboxes.new_zeros((num_points, 5))
+                   gt_bboxes.new_zeros((num_points, 4)), \
+                   gt_bboxes.new_zeros((num_points, 1))
 
         areas = gt_bboxes[:, 2] * gt_bboxes[:, 3]
         # TODO: figure out why these two are different
@@ -397,39 +404,26 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         regress_ranges = regress_ranges[:, None, :].expand(
             num_points, num_gts, 2)
         points = points[:, None, :].expand(num_points, num_gts, 2)
-
         gt_bboxes = gt_bboxes[None].expand(num_points, num_gts, 5)
-        gt_ctr, gt_wh, gt_thetas = torch.split(
-            gt_bboxes, [2, 2, 1], dim=2)
+        gt_ctr, gt_wh, gt_angle = torch.split(gt_bboxes, [2, 2, 1], dim=2)
 
-        if self.edge_swap:
-            dtheta1 = norm_angle(gt_thetas, self.angle_version)
-            dtheta2 = norm_angle(gt_thetas + np.pi / 2, self.angle_version)
-            abs_dtheta1 = torch.abs(dtheta1)
-            abs_dtheta2 = torch.abs(dtheta2)
-            gw_regular = torch.where(abs_dtheta1 < abs_dtheta2, gw, gh)
-            gh_regular = torch.where(abs_dtheta1 < abs_dtheta2, gh, gw)
-            gw, gh = gw_regular, gh_regular
-            gt_thetas = torch.where(
-                abs_dtheta1 < abs_dtheta2, dtheta1, dtheta2)
-        else:
-            gt_thetas = norm_angle(gt_thetas, self.angle_version)
-
-        cos, sin = torch.cos(gt_thetas), torch.sin(gt_thetas)
-        Matrix = torch.cat([cos, sin, -sin, cos], dim=-1).reshape(
-            num_points, num_gts, 2, 2)
+        cos_angle, sin_angle = torch.cos(gt_angle), torch.sin(gt_angle)
+        rot_matrix = torch.cat([cos_angle, sin_angle, -sin_angle, cos_angle],
+                               dim=-1).reshape(num_points, num_gts, 2, 2)
         offset = points - gt_ctr
-        offset = torch.matmul(Matrix, offset[..., None])
+        offset = torch.matmul(rot_matrix, offset[..., None])
         offset = offset.squeeze(-1)
 
-        W, H = gt_wh[..., 0], gt_wh[..., 1]
+        w, h = gt_wh[..., 0], gt_wh[..., 1]
         offset_x, offset_y = offset[..., 0], offset[..., 1]
-        left = W / 2 + offset_x
-        right = W / 2 - offset_x
-        top = H / 2 + offset_y
-        bottom = H / 2 - offset_y
+        left = w / 2 + offset_x
+        right = w / 2 - offset_x
+        top = h / 2 + offset_y
+        bottom = h / 2 - offset_y
         bbox_targets = torch.stack((left, top, right, bottom), -1)
 
+        # condition1: inside a gt bbox
+        inside_gt_bbox_mask = bbox_targets.min(-1)[0] > 0
         if self.center_sampling:
             # condition1: inside a `center bbox`
             radius = self.center_sample_radius
@@ -442,13 +436,9 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                 stride[lvl_begin:lvl_end] = self.strides[lvl_idx] * radius
                 lvl_begin = lvl_end
 
-            inside_gt_bbox_mask = bbox_targets.min(-1)[0] > 0
             inside_center_bbox_mask = (abs(offset) < stride).all(dim=-1)
-            inside_gt_bbox_mask = torch.logical_and(
-                inside_center_bbox_mask, inside_gt_bbox_mask)
-        else:
-            # condition1: inside a gt bbox
-            inside_gt_bbox_mask = bbox_targets.min(-1)[0] > 0
+            inside_gt_bbox_mask = torch.logical_and(inside_center_bbox_mask,
+                                                    inside_gt_bbox_mask)
 
         # condition2: limit the regression range for each location
         max_regress_distance = bbox_targets.max(-1)[0]
@@ -462,16 +452,12 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         areas[inside_regress_range == 0] = INF
         min_area, min_area_inds = areas.min(dim=1)
 
-        if gt_labels == None:
-            labels = torch.zeros_like(min_area_inds)  # set as FG in RPN
-        else:
-            labels = gt_labels[min_area_inds]
+        labels = gt_labels[min_area_inds]
         labels[min_area == INF] = self.num_classes  # set as BG
         bbox_targets = bbox_targets[range(num_points), min_area_inds]
+        angle_targets = gt_angle[range(num_points), min_area_inds]
 
-        theta_targets = gt_thetas[range(num_points), min_area_inds]
-        bbox_targets = torch.cat([bbox_targets, theta_targets], dim=1)
-        return labels, bbox_targets
+        return labels, bbox_targets, angle_targets
 
     def centerness_target(self, pos_bbox_targets):
         """Compute centerness targets.
@@ -479,7 +465,6 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
         Args:
             pos_bbox_targets (Tensor): BBox targets of positive bboxes in shape
                 (num_pos, 4)
-
         Returns:
             Tensor: Centerness target.
         """
@@ -494,23 +479,189 @@ class RotatedFCOSHead(RotatedAnchorFreeHead):
                     top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
         return torch.sqrt(centerness_targets)
 
-    def _get_points_single(self,
-                           featmap_size,
-                           stride,
-                           dtype,
-                           device,
-                           flatten=False):
-        """Get points according to feature map size.
+    @force_fp32(
+        apply_to=('cls_scores', 'bbox_preds', 'angle_preds', 'centernesses'))
+    def get_bboxes(self,
+                   cls_scores,
+                   bbox_preds,
+                   angle_preds,
+                   centernesses,
+                   img_metas,
+                   cfg=None,
+                   rescale=None):
+        """Transform network output for a batch into bbox predictions.
 
-        This function will be deprecated soon.
+        Args:
+            cls_scores (list[Tensor]): Box scores for each scale level
+                Has shape (N, num_points * num_classes, H, W)
+            bbox_preds (list[Tensor]): Box energies / deltas for each scale
+                level with shape (N, num_points * 4, H, W)
+            angle_preds (list[Tensor]): Box angle for each scale level \
+                with shape (N, num_points * 1, H, W)
+            centernesses (list[Tensor]): Centerness for each scale level with
+                shape (N, num_points * 1, H, W)
+            img_metas (list[dict]): Meta information of each image, e.g.,
+                image size, scaling factor, etc.
+            cfg (mmcv.Config): Test / postprocessing configuration,
+                if None, test_cfg would be used
+            rescale (bool): If True, return boxes in original image space
+
+        Returns:
+            list[tuple[Tensor, Tensor]]: Each item in result_list is 2-tuple.
+                The first item is an (n, 6) tensor, where the first 5 columns
+                are bounding box positions (x, y, w, h, angle) and the 6-th
+                column is a score between 0 and 1. The second item is a
+                (n,) tensor where each item is the predicted class label of the
+                corresponding box.
         """
-        warnings.warn(
-            '`_get_points_single` in `FCOSHead` will be '
-            'deprecated soon, we support a multi level point generator now'
-            'you can get points of a single level feature map '
-            'with `self.prior_generator.single_level_grid_priors` ')
+        assert len(cls_scores) == len(bbox_preds)
+        num_levels = len(cls_scores)
 
-        y, x = super()._get_points_single(featmap_size, stride, dtype, device)
-        points = torch.stack((x.reshape(-1) * stride, y.reshape(-1) * stride),
-                             dim=-1) + stride // 2
-        return points
+        featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
+
+        mlvl_points = self.prior_generator.grid_priors(featmap_sizes,
+                                                       bbox_preds[0].dtype,
+                                                       bbox_preds[0].device)
+        result_list = []
+        for img_id in range(len(img_metas)):
+            cls_score_list = [
+                cls_scores[i][img_id].detach() for i in range(num_levels)
+            ]
+            bbox_pred_list = [
+                bbox_preds[i][img_id].detach() for i in range(num_levels)
+            ]
+            angle_pred_list = [
+                angle_preds[i][img_id].detach() for i in range(num_levels)
+            ]
+            centerness_pred_list = [
+                centernesses[i][img_id].detach() for i in range(num_levels)
+            ]
+            img_shape = img_metas[img_id]['img_shape']
+            scale_factor = img_metas[img_id]['scale_factor']
+            det_bboxes = self._get_bboxes_single(cls_score_list,
+                                                 bbox_pred_list,
+                                                 angle_pred_list,
+                                                 centerness_pred_list,
+                                                 mlvl_points, img_shape,
+                                                 scale_factor, cfg, rescale)
+            result_list.append(det_bboxes)
+        return result_list
+
+    def _get_bboxes_single(self,
+                           cls_scores,
+                           bbox_preds,
+                           angle_preds,
+                           centernesses,
+                           mlvl_points,
+                           img_shape,
+                           scale_factor,
+                           cfg,
+                           rescale=False):
+        """Transform outputs for a single batch item into bbox predictions.
+
+        Args:
+            cls_scores (list[Tensor]): Box scores for a single scale level
+                Has shape (num_points * num_classes, H, W).
+            bbox_preds (list[Tensor]): Box energies / deltas for a single scale
+                level with shape (num_points * 4, H, W).
+            angle_preds (list[Tensor]): Box angle for a single scale level \
+                with shape (N, num_points * 1, H, W).
+            centernesses (list[Tensor]): Centerness for a single scale level
+                with shape (num_points * 1, H, W).
+            mlvl_points (list[Tensor]): Box reference for a single scale level
+                with shape (num_total_points, 4).
+            img_shape (tuple[int]): Shape of the input image,
+                (height, width, 3).
+            scale_factor (ndarray): Scale factor of the image arrange as
+                (w_scale, h_scale, w_scale, h_scale).
+            cfg (mmcv.Config): Test / postprocessing configuration,
+                if None, test_cfg would be used.
+            rescale (bool): If True, return boxes in original image space.
+
+        Returns:
+            Tensor: Labeled boxes in shape (n, 6), where the first 5 columns
+                are bounding box positions (x, y, w, h, angle) and the
+                6-th column is a score between 0 and 1.
+        """
+        cfg = self.test_cfg if cfg is None else cfg
+        assert len(cls_scores) == len(bbox_preds) == len(mlvl_points)
+        mlvl_bboxes = []
+        mlvl_scores = []
+        mlvl_centerness = []
+        for cls_score, bbox_pred, angle_pred, centerness, points in zip(
+                cls_scores, bbox_preds, angle_preds, centernesses,
+                mlvl_points):
+            assert cls_score.size()[-2:] == bbox_pred.size()[-2:]
+            scores = cls_score.permute(1, 2, 0).reshape(
+                -1, self.cls_out_channels).sigmoid()
+            centerness = centerness.permute(1, 2, 0).reshape(-1).sigmoid()
+
+            bbox_pred = bbox_pred.permute(1, 2, 0).reshape(-1, 4)
+            angle_pred = angle_pred.permute(1, 2, 0).reshape(-1, 1)
+            bbox_pred = torch.cat([bbox_pred, angle_pred], dim=1)
+            nms_pre = cfg.get('nms_pre', -1)
+            if nms_pre > 0 and scores.shape[0] > nms_pre:
+                max_scores, _ = (scores * centerness[:, None]).max(dim=1)
+                _, topk_inds = max_scores.topk(nms_pre)
+                points = points[topk_inds, :]
+                bbox_pred = bbox_pred[topk_inds, :]
+                scores = scores[topk_inds, :]
+                centerness = centerness[topk_inds]
+            bboxes = self.bbox_coder.decode(
+                points, bbox_pred, max_shape=img_shape)
+            mlvl_bboxes.append(bboxes)
+            mlvl_scores.append(scores)
+            mlvl_centerness.append(centerness)
+        mlvl_bboxes = torch.cat(mlvl_bboxes)
+        if rescale:
+            scale_factor = mlvl_bboxes.new_tensor(scale_factor)
+            mlvl_bboxes[..., :4] = mlvl_bboxes[..., :4] / scale_factor
+        mlvl_scores = torch.cat(mlvl_scores)
+        padding = mlvl_scores.new_zeros(mlvl_scores.shape[0], 1)
+        # remind that we set FG labels to [0, num_class-1] since mmdet v2.0
+        # BG cat_id: num_class
+        mlvl_scores = torch.cat([mlvl_scores, padding], dim=1)
+        mlvl_centerness = torch.cat(mlvl_centerness)
+        det_bboxes, det_labels = multiclass_nms_rotated(
+            mlvl_bboxes,
+            mlvl_scores,
+            cfg.score_thr,
+            cfg.nms,
+            cfg.max_per_img,
+            score_factors=mlvl_centerness)
+        return det_bboxes, det_labels
+
+    @force_fp32(
+        apply_to=('cls_scores', 'bbox_preds', 'angle_preds', 'centerness'))
+    def refine_bboxes(self, cls_scores, bbox_preds, angle_preds, centernesses):
+        """This function will be used in S2ANet, whose num_anchors=1."""
+        num_levels = len(cls_scores)
+        assert num_levels == len(bbox_preds)
+        num_imgs = cls_scores[0].size(0)
+        for i in range(num_levels):
+            assert num_imgs == cls_scores[i].size(0) == bbox_preds[i].size(0)
+
+        # device = cls_scores[0].device
+        featmap_sizes = [cls_scores[i].shape[-2:] for i in range(num_levels)]
+        mlvl_points = self.prior_generator.grid_priors(featmap_sizes,
+                                                       bbox_preds[0].dtype,
+                                                       bbox_preds[0].device)
+        bboxes_list = [[] for _ in range(num_imgs)]
+
+        for lvl in range(num_levels):
+            bbox_pred = bbox_preds[lvl]
+            angle_pred = angle_preds[lvl]
+            bbox_pred = bbox_pred.permute(0, 2, 3, 1)
+            bbox_pred = bbox_pred.reshape(num_imgs, -1, 4)
+            angle_pred = angle_pred.permute(0, 2, 3, 1)
+            angle_pred = angle_pred.reshape(num_imgs, -1, 1)
+            bbox_pred = torch.cat([bbox_pred, angle_pred], dim=-1)
+
+            points = mlvl_points[lvl]
+
+            for img_id in range(num_imgs):
+                bbox_pred_i = bbox_pred[img_id]
+                decode_bbox_i = self.bbox_coder.decode(points, bbox_pred_i)
+                bboxes_list[img_id].append(decode_bbox_i.detach())
+
+        return bboxes_list
