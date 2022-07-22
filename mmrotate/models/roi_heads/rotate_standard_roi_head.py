@@ -249,14 +249,20 @@ class RotatedStandardRoIHead(BaseModule, metaclass=ABCMeta):
         """
         assert self.with_bbox, 'Bbox head must be implemented.'
 
-        det_bboxes, det_labels = self.simple_test_bboxes(
+        det_bboxes, det_labels, det_feats = self.simple_test_bboxes(
             x, img_metas, proposal_list, self.test_cfg, rescale=rescale)
-
-        bbox_results = [
-            rbbox2result(det_bboxes[i], det_labels[i],
-                         self.bbox_head.num_classes)
-            for i in range(len(det_bboxes))
-        ]
+        if det_feats == None:
+            bbox_results = [
+                rbbox2result(det_bboxes[i], det_labels[i],
+                             self.bbox_head.num_classes)
+                for i in range(len(det_bboxes))
+            ]
+        else:
+            bbox_results = [
+                rbbox2result(det_bboxes[i], det_labels[i],
+                             self.bbox_head.num_classes, det_feats[i])
+                for i in range(len(det_bboxes))
+            ]
 
         return bbox_results
 
@@ -339,7 +345,7 @@ class RotatedStandardRoIHead(BaseModule, metaclass=ABCMeta):
                         (0, self.bbox_head.fc_cls.out_features))
 
             else:
-                det_bbox, det_label = self.bbox_head.get_bboxes(
+                det_bbox, det_label, _ = self.bbox_head.get_bboxes(
                     rois[i],
                     cls_score[i],
                     bbox_pred[i],
@@ -349,4 +355,4 @@ class RotatedStandardRoIHead(BaseModule, metaclass=ABCMeta):
                     cfg=rcnn_test_cfg)
             det_bboxes.append(det_bbox)
             det_labels.append(det_label)
-        return det_bboxes, det_labels
+        return det_bboxes, det_labels, None

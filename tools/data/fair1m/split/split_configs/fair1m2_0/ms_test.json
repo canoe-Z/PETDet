@@ -2,7 +2,7 @@
   "nproc": 10,
   "load_type": "fair1m",
   "img_dirs": [
-    "data/DOTA1_0/test/images/"
+    "data/FAIR1M2_0/test/images/"
   ],
   "ann_dirs": null,
   "classes": null,
@@ -27,6 +27,6 @@
     116,
     124
   ],
-  "save_dir": "data/split_ms_dota1_0/test/",
+  "save_dir": "data/split_ms_fair1m2_0/test/",
   "save_ext": ".png"
 }

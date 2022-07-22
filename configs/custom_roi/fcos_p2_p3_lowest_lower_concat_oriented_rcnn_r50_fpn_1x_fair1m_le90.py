@@ -5,7 +5,7 @@ model = dict(
     roi_head=dict(
         bbox_roi_extractor=dict(
             type='CustomRotatedSingleRoIExtractor',
-            #current_feat='lower',
+            current_feat='lower',
             fusion_feat='lowest',
             aggregation='concat',
             roi_layer=dict(
@@ -19,4 +19,9 @@ model = dict(
             in_channels=512
         )
     )
+)
+
+data = dict(
+    samples_per_gpu=4,
+    workers_per_gpu=2
 )

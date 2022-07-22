@@ -7,6 +7,3 @@ from .dota import DOTADataset
 class SARDataset(DOTADataset):
     """SAR ship dataset for detection (Support RSSDD and HRSID)."""
     CLASSES = ('ship', )
-    PALETTE = [
-        (0, 255, 0),
-    ]

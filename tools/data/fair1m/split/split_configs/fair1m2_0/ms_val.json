@@ -2,10 +2,10 @@
   "nproc": 10,
   "load_type": "fair1m",
   "img_dirs": [
-    "data/DOTA1_0/val/images/"
+    "data/FARI1M2_0/val/images/"
   ],
   "ann_dirs": [
-    "data/DOTA1_0/val/labelTxt/"
+    "data/FARI1M2_0/val/labelTxt/"
   ],
   "classes": null,
   "prior_annfile": null,
@@ -29,6 +29,6 @@
     116,
     124
   ],
-  "save_dir": "data/split_ms_dota1_0/val/",
+  "save_dir": "data/split_ms_fair1m2_0/val/",
   "save_ext": ".png"
 }
