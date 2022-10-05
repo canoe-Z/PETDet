@@ -1,5 +1,5 @@
 _base_ = [
-    '../../_base_/datasets/fair1mv2.py', '../../_base_/schedules/schedule_1x.py',
+    '../../_base_/datasets/shiprs3.py', '../../_base_/schedules/schedule_100e.py',
     '../../_base_/default_runtime.py'
 ]
 
@@ -61,7 +61,7 @@ model = dict(
             in_channels=256,
             fc_out_channels=1024,
             roi_feat_size=7,
-            num_classes=37,
+            num_classes=50,
             bbox_coder=dict(
                 type='DeltaXYWHAOBBoxCoder',
                 angle_range=angle_version,
@@ -146,6 +146,6 @@ lr_config = dict(
     warmup='linear',
     warmup_iters=2000,
     warmup_ratio=0.0005,
-    step=[8, 11])
+    step=[80, 90])
 fp16 = dict(loss_scale='dynamic')
 optimizer = dict(lr=0.02)

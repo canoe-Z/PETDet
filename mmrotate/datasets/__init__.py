@@ -6,6 +6,7 @@ from .pipelines import *  # noqa: F401, F403
 from .sar import SARDataset  # noqa: F401, F403
 
 from .fair1m import FAIR1MDataset, FAIR1MCourseDataset
-
+from .shiprs import ShipRSImageNet
+from .mar20 import MAR20Dataset
 __all__ = ['SARDataset', 'DOTADataset', 'build_dataset', 'HRSCDataset', 'FAIR1MDataset',
-           'FAIR1MCourseDataset', 'build_dataset']
+           'FAIR1MCourseDataset', 'ShipRSImageNet', 'MAR20Dataset', 'build_dataset']

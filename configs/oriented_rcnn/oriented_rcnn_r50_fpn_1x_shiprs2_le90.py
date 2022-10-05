@@ -1,6 +1,6 @@
 _base_ = [
-    '../../_base_/datasets/fair1mv2.py', '../../_base_/schedules/schedule_1x.py',
-    '../../_base_/default_runtime.py'
+    '../_base_/datasets/shiprs2.py', '../_base_/schedules/schedule_100e.py',
+    '../_base_/default_runtime.py'
 ]
 
 angle_version = 'le90'
@@ -20,31 +20,26 @@ model = dict(
         type='FPN',
         in_channels=[256, 512, 1024, 2048],
         out_channels=256,
-        start_level=1,
-        add_extra_convs='on_input',
         num_outs=5),
     rpn_head=dict(
-        type='RotatedFCOSRPNHead',
+        type='OrientedRPNHead',
         in_channels=256,
-        stacked_convs=4,
         feat_channels=256,
-        strides=[8, 16, 32, 64, 128],
-        center_sampling=False,
-        center_sample_radius=1.5,
-        norm_on_bbox=False,
-        centerness_on_reg=False,
-        scale_angle=True,
+        version=angle_version,
+        anchor_generator=dict(
+            type='AnchorGenerator',
+            scales=[8],
+            ratios=[0.5, 1.0, 2.0],
+            strides=[4, 8, 16, 32, 64]),
         bbox_coder=dict(
-            type='DistanceAnglePointCoder', angle_version=angle_version),
+            type='MidpointOffsetCoder',
+            angle_range=angle_version,
+            target_means=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            target_stds=[1.0, 1.0, 1.0, 1.0, 0.5, 0.5]),
         loss_cls=dict(
-            type='FocalLoss',
-            use_sigmoid=True,
-            gamma=2.0,
-            alpha=0.25,
-            loss_weight=0.5),
-        loss_bbox=dict(type='RotatedIoULoss', loss_weight=0.5),
-        loss_centerness=dict(
-            type='CrossEntropyLoss', use_sigmoid=True, loss_weight=0.5)),
+            type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0),
+        loss_bbox=dict(
+            type='SmoothL1Loss', beta=0.1111111111111111, loss_weight=1.0)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(
@@ -55,13 +50,13 @@ model = dict(
                 sample_num=2,
                 clockwise=True),
             out_channels=256,
-            featmap_strides=[8, 16, 32, 64]),
+            featmap_strides=[4, 8, 16, 32]),
         bbox_head=dict(
             type='RotatedShared2FCBBoxHead',
             in_channels=256,
             fc_out_channels=1024,
             roi_feat_size=7,
-            num_classes=37,
+            num_classes=25,
             bbox_coder=dict(
                 type='DeltaXYWHAOBBoxCoder',
                 angle_range=angle_version,
@@ -78,11 +73,18 @@ model = dict(
         rpn=dict(
             assigner=dict(
                 type='MaxIoUAssigner',
-                pos_iou_thr=0.5,
-                neg_iou_thr=0.4,
-                min_pos_iou=0,
+                pos_iou_thr=0.7,
+                neg_iou_thr=0.3,
+                min_pos_iou=0.3,
+                match_low_quality=True,
                 ignore_iof_thr=-1),
-            allowed_border=-1,
+            sampler=dict(
+                type='RandomSampler',
+                num=256,
+                pos_fraction=0.5,
+                neg_pos_ub=-1,
+                add_gt_as_proposals=False),
+            allowed_border=0,
             pos_weight=-1,
             debug=False),
         rpn_proposal=dict(
@@ -141,11 +143,5 @@ data = dict(
     val=dict(version=angle_version),
     test=dict(version=angle_version))
 
-lr_config = dict(
-    policy='step',
-    warmup='linear',
-    warmup_iters=2000,
-    warmup_ratio=0.0005,
-    step=[8, 11])
-fp16 = dict(loss_scale='dynamic')
+#optimizer = dict(lr=0.005)
 optimizer = dict(lr=0.02)

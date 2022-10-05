@@ -7,10 +7,10 @@ from mmrotate.core import obb2xyxy
 from mmcv.runner import force_fp32
 
 from ...builder import ROTATED_HEADS
-from ..rotated_fcos_head import RotatedFCOSHead
+from ..rotated_fcos_head_my import RotatedFCOSHeadMy
 
 @ROTATED_HEADS.register_module()
-class RotatedFCOSRPNHead(RotatedFCOSHead):
+class RotatedFCOSRPNHead(RotatedFCOSHeadMy):
     def __init__(self, **kwargs):
         super(RotatedFCOSRPNHead, self).__init__(
             num_classes=1,
@@ -134,23 +134,7 @@ class RotatedFCOSRPNHead(RotatedFCOSHead):
                 scores.new_full((scores.size(0), ),
                                 level_idx,
                                 dtype=torch.long))
-
-            if cfg.nms_pre > 0 and scores.shape[0] > cfg.nms_pre:
-                # sort is faster than topk
-                # _, topk_inds = scores.topk(cfg.nms_pre)
-                ranked_scores, rank_inds = scores.sort(descending=True)
-                topk_inds = rank_inds[:cfg.nms_pre]
-                scores = ranked_scores[:cfg.nms_pre]
-                rpn_bbox_pred = rpn_bbox_pred[topk_inds, :]
-                points = points[topk_inds, :]
-            mlvl_scores.append(scores)
-            mlvl_bbox_preds.append(rpn_bbox_pred)
-            mlvl_valid_points.append(points)
-            level_ids.append(
-                scores.new_full((scores.size(0), ),
-                                level_idx,
-                                dtype=torch.long))
-
+                                
         return self._bbox_post_process(mlvl_scores, mlvl_bbox_preds,
                                        mlvl_valid_points, level_ids, cfg,
                                        img_shape)
@@ -184,8 +168,7 @@ class RotatedFCOSRPNHead(RotatedFCOSHead):
         scores = torch.cat(mlvl_scores)
         points = torch.cat(mlvl_valid_points)
         rpn_bbox_pred = torch.cat(mlvl_bboxes)
-        proposals = self.bbox_coder.decode(
-            points, rpn_bbox_pred, angle_range=self.angle_version, edge_swap=self.edge_swap,max_shape=img_shape)
+        proposals = self.bbox_coder.decode(points, rpn_bbox_pred)
         ids = torch.cat(level_ids)
 
         if cfg.min_bbox_size >= 0:

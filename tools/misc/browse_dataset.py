@@ -42,7 +42,6 @@ def parse_args():
         'Note that the quotation marks are necessary and that no white space '
         'is allowed.')
     args = parser.parse_args()
-    return args
 
 
 def retrieve_data_cfg(config_path, skip_type, cfg_options):

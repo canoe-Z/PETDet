@@ -1,4 +1,4 @@
-_base_ = ['./fcos_oriented_rcnn_r50_fpn_1x_fair1m_le90.py']
+_base_ = ['./fcos_oriented_rcnn_r50_fpn_1x_mar20_le90.py']
 
 angle_version = 'le90'
 model = dict(

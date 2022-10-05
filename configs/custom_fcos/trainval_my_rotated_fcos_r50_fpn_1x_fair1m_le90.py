@@ -1,7 +1,8 @@
 _base_ = [
-    './fcos_p2_p3_sample2_oriented_rcnn_r50_fpn_1x_fair1m_le90.py'
+    './my_rotated_fcos_r50_fpn_1x_fair1m_le90.py'
 ]
 
+fp16 = dict(loss_scale='dynamic')
 evaluation = dict(interval=12, metric='mAP')
 
 # dataset settings

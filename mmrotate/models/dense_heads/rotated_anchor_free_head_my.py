@@ -15,7 +15,7 @@ from .rotated_base_dense_head import RotatedBaseDenseHead
 
 
 @ROTATED_HEADS.register_module()
-class RotatedAnchorFreeHead(RotatedBaseDenseHead, BBoxTestMixin):
+class RotatedAnchorFreeHeadMy(RotatedBaseDenseHead, BBoxTestMixin):
     """Anchor-free head (FCOS, Fovea, RepPoints, etc.).
 
     Args:
@@ -40,8 +40,6 @@ class RotatedAnchorFreeHead(RotatedBaseDenseHead, BBoxTestMixin):
         test_cfg (dict): Testing config of anchor head.
         init_cfg (dict or list[dict], optional): Initialization config dict.
     """  # noqa: W605
-
-    _version = 1
 
     def __init__(self,
                  num_classes,
@@ -73,7 +71,7 @@ class RotatedAnchorFreeHead(RotatedBaseDenseHead, BBoxTestMixin):
                          name='conv_cls',
                          std=0.01,
                          bias_prob=0.01))):
-        super(RotatedAnchorFreeHead, self).__init__(init_cfg)
+        super(RotatedAnchorFreeHeadMy, self).__init__(init_cfg)
         self.num_classes = num_classes
         self.use_sigmoid_cls = loss_cls.get('use_sigmoid', False)
         if self.use_sigmoid_cls:
@@ -333,21 +331,3 @@ class RotatedAnchorFreeHead(RotatedBaseDenseHead, BBoxTestMixin):
                 self._get_points_single(featmap_sizes[i], self.strides[i],
                                         dtype, device, flatten))
         return mlvl_points
-
-    def aug_test(self, feats, img_metas, rescale=False):
-        """Test function with test time augmentation.
-
-        Args:
-            feats (list[Tensor]): the outer list indicates test-time
-                augmentations and inner Tensor should have a shape NxCxHxW,
-                which contains features for all images in the batch.
-            img_metas (list[list[dict]]): the outer list indicates test-time
-                augs (multiscale, flip, etc.) and the inner list indicates
-                images in a batch. each dict has image information.
-            rescale (bool, optional): Whether to rescale the results.
-                Defaults to False.
-
-        Returns:
-            list[ndarray]: bbox results of each class
-        """
-        return self.aug_test_bboxes(feats, img_metas, rescale=rescale)

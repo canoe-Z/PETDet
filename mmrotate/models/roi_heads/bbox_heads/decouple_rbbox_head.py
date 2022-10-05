@@ -8,7 +8,7 @@ from mmdet.models.utils import build_linear_layer
 
 from ...builder import ROTATED_HEADS
 from .convfc_rbbox_head import RotatedConvFCBBoxHead
-from vit_pytorch import ViT
+from vit_pytorch import SimpleViT
 
 
 @ROTATED_HEADS.register_module()
@@ -28,17 +28,15 @@ class RotatedDecoupleBBoxHead(RotatedConvFCBBoxHead):
         self.use_vit = use_vit
         if self.use_vit:
             cls_channels = self.num_classes + 1
-            self.v = ViT(
+            self.v = SimpleViT(
                 image_size=self.roi_feat_size,
                 patch_size=1,
                 num_classes=cls_channels,
-                dim=256,
-                depth=2,
+                dim=512,
+                depth=3,
                 heads=2,
                 channels=256,
-                mlp_dim=1024,
-                dropout=0.1,
-                emb_dropout=0.1)
+                mlp_dim=1024)
 
     def forward(self, x_cls, x_reg):
         """Forward function."""

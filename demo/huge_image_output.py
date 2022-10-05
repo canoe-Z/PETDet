@@ -10,6 +10,7 @@ python demo/huge_image_demo.py \
     checkpoint/oriented_rcnn_r50_fpn_1x_dota_le90-6d2b2ce0.pth \
 ```
 """  # nowq
+import numpy as np
 
 from argparse import ArgumentParser
 
@@ -24,6 +25,7 @@ def parse_args():
     parser.add_argument('config', help='Config file')
     parser.add_argument('checkpoint', help='Checkpoint file')
     parser.add_argument('--out-file', default=None, help='Path to output file')
+    parser.add_argument('--out-txt', default=None, help='Path to output file')
     parser.add_argument(
         '--patch_sizes',
         type=int,
@@ -75,6 +77,9 @@ def main(args):
         palette=args.palette,
         score_thr=args.score_thr,
         out_file=args.out_file)
+
+    if args.out_txt:
+        np.save(args.out_txt, result)
 
 
 if __name__ == '__main__':
