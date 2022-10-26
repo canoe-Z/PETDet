@@ -6,7 +6,6 @@ from .kf_iou_loss import KFLoss
 from .kld_reppoints_loss import KLDRepPointsLoss
 from .rotated_iou_loss import RotatedIoULoss
 from .smooth_focal_loss import SmoothFocalLoss
-from .poly_iou_loss import PolyIoULoss, PolyGIoULoss
 from .spatial_border_loss import SpatialBorderLoss
 
 __all__ = [

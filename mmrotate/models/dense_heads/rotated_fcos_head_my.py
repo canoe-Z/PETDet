@@ -6,7 +6,6 @@ from mmcv.cnn import Scale
 from mmcv.runner import force_fp32
 from mmdet.core import multi_apply, reduce_mean
 
-from mmrotate.core import build_bbox_coder, multiclass_nms_rotated
 from ..builder import ROTATED_HEADS, build_loss
 from mmrotate.core.bbox import rbbox_overlaps
 from .rotated_anchor_free_head_my import RotatedAnchorFreeHeadMy
@@ -105,6 +104,7 @@ class RotatedFCOSHeadMy(RotatedAnchorFreeHeadMy):
         self.start_level = start_level
         self.scale_angle = scale_angle
         self.angle_version=angle_version
+
         super().__init__(
             num_classes,
             in_channels,
@@ -126,7 +126,7 @@ class RotatedFCOSHeadMy(RotatedAnchorFreeHeadMy):
         self.conv_theta = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
         self.scales = nn.ModuleList([Scale(1.0) for _ in self.strides])
         if self.scale_angle:
-            self.scale_t = Scale(1.0)
+            self.scale_angle = Scale(1.0)
 
     def forward(self, feats):
         """Forward features from the upstream network.
@@ -178,10 +178,10 @@ class RotatedFCOSHeadMy(RotatedAnchorFreeHeadMy):
                 bbox_pred *= stride
         else:
             bbox_pred = bbox_pred.exp()
-        theta_pred = self.conv_theta(reg_feat)
+        angle_pred = self.conv_theta(reg_feat)
         if self.scale_angle:
-            theta_pred = self.scale_t(theta_pred)
-        bbox_pred = torch.cat([bbox_pred, theta_pred], dim=1)
+            angle_pred = self.scale_angle(angle_pred).float()
+        bbox_pred = torch.cat([bbox_pred, angle_pred], dim=1)
         return cls_score, bbox_pred, centerness
 
     @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'centernesses'))
@@ -442,6 +442,7 @@ class RotatedFCOSHeadMy(RotatedAnchorFreeHeadMy):
 
         theta_targets = gt_angle[range(num_points), min_area_inds]
         bbox_targets = torch.cat([bbox_targets, theta_targets], dim=1)
+        
         return labels, bbox_targets
 
     def centerness_target(self, pos_bbox_targets):

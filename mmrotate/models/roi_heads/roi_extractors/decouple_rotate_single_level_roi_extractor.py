@@ -32,13 +32,13 @@ class DecoupleRotatedSingleRoIExtractor(BaseRoIExtractor):
                  out_channels,
                  featmap_strides,
                  finest_scale=56,
-                 cls_feat='lower',
+                 start_level=0,
                  init_cfg=None):
         super(DecoupleRotatedSingleRoIExtractor,
               self).__init__(roi_layer, out_channels, featmap_strides,
                              init_cfg)
         self.finest_scale = finest_scale
-        self.cls_feat = cls_feat
+        self.start_level = start_level
         self.fp16_enabled = False
 
     def build_roi_layers(self, layer_cfg, featmap_strides):
@@ -82,15 +82,13 @@ class DecoupleRotatedSingleRoIExtractor(BaseRoIExtractor):
         Returns:
             Tensor: Level index (0-based) of each RoI, shape (k, )
         """
-        # scale = torch.sqrt(
-        #     (rois[:, 3] - rois[:, 1]) * (rois[:, 4] - rois[:, 2]))
         scale = torch.sqrt(rois[:, 3] * rois[:, 4])
         target_lvls = torch.floor(torch.log2(scale / self.finest_scale + 1e-6))
         target_lvls = target_lvls.clamp(min=0, max=num_levels - 1).long()
         return target_lvls
 
-    @force_fp32(apply_to=('feats', ), out_fp16=True)
-    def forward(self, feats, rois, roi_scale_factor=None):
+    @force_fp32(apply_to=('feats', 'backbone_feat',), out_fp16=True)
+    def forward(self, feats, rois, roi_scale_factor=None, backbone_feat=None):
         """Forward function.
 
         Args:
@@ -101,11 +99,15 @@ class DecoupleRotatedSingleRoIExtractor(BaseRoIExtractor):
         Returns:
             torch.Tensor: Scaled RoI features.
         """
-        if isinstance(self.roi_layers[0], ops.RiRoIAlignRotated):
+        from mmrotate import digit_version, mmcv_version
+        if isinstance(self.roi_layers[0], ops.RiRoIAlignRotated
+                      ) or mmcv_version == digit_version('1.4.5'):
             out_size = nn.modules.utils._pair(self.roi_layers[0].out_size)
         else:
             out_size = self.roi_layers[0].output_size
-        num_levels = len(feats)-1
+        feats = feats[self.start_level:]
+
+        num_levels = len(feats)
         roi_feats_cls = feats[0].new_zeros(
             rois.size(0), self.out_channels, *out_size)
         roi_feats_reg = feats[0].new_zeros(
@@ -116,22 +118,19 @@ class DecoupleRotatedSingleRoIExtractor(BaseRoIExtractor):
                 return roi_feats_cls, roi_feats_reg
             return self.roi_layers[0](feats[0], rois), self.roi_layers[0](feats[0], rois)
 
-        target_lvls = self.map_roi_levels(rois, num_levels)+1
+        target_lvls = self.map_roi_levels(rois, num_levels)
         if roi_scale_factor is not None:
             rois = self.roi_rescale(rois, roi_scale_factor)
+
         for i in range(num_levels):
             mask = target_lvls == i
             inds = mask.nonzero(as_tuple=False).squeeze(1)
             if inds.numel() > 0:
                 rois_ = rois[inds]
-                roi_feats_c = self.roi_layers[i](feats[i], rois_)
-                if self.cls_feat == 'lower':
-                    roi_feats_f = self.roi_layers[i-1](feats[i-1], rois_)
-                elif self.cls_feat == 'lowest':
-                    roi_feats_f = self.roi_layers[0](feats[0], rois_)
-
-                roi_feats_cls[inds] = roi_feats_f
-                roi_feats_reg[inds] = roi_feats_c
+                roi_feats_backbone = self.roi_layers[0](backbone_feat, rois_)
+                roi_feats_neck = self.roi_layers[i](feats[i], rois_)
+                roi_feats_reg[inds] = roi_feats_neck
+                roi_feats_cls[inds] = roi_feats_backbone+roi_feats_neck
             else:
                 # Sometimes some pyramid levels will not be used for RoI
                 # feature extraction and this will cause an incomplete

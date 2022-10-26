@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .re_fpn import ReFPN
 
-__all__ = ['ReFPN']
+from .lfcp import LFCP
+__all__ = ['ReFPN', 'LFCP']

@@ -15,6 +15,8 @@ from .two_stage import RotatedTwoStageDetector
 from .rotated_fcos import RotatedFCOS
 from .rotated_rpn import RotatedRPN
 from .ca_two_stage import CARPNRotatedTwoStageDetector
+from .lfcp import OrientedRCNNLFCP
+from .lff import OrientedRCNNLFF
 
 __all__ = [
     'RotatedRetinaNet', 'RotatedFasterRCNN', 'OrientedRCNN', 'RoITransformer',

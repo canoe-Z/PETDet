@@ -177,8 +177,8 @@ class OrientedCascadeRoIHead(RotatedStandardRoIHead):
                         feats=[lvl_feat[j][None] for lvl_feat in x])
 
                     if gt_bboxes[j].numel() == 0:
-                        sampling_result.pos_gt_bboxes = gt_bboxes[j].new_zeors(
-                            (0, gt_bboxes[0].size(-1)))
+                        sampling_result.pos_gt_bboxes = gt_bboxes[j].new(
+                        (0, gt_bboxes[0].size(-1))).zero_()
                     else:
                         sampling_result.pos_gt_bboxes = \
                             gt_bboxes[j][sampling_result.pos_assigned_gt_inds, :]

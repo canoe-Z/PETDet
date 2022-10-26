@@ -25,9 +25,11 @@ class RotatedRPNHead(AnchorHead):
 
     def __init__(self,
                  in_channels,
+                 start_level=0,
                  init_cfg=dict(type='Normal', layer='Conv2d', std=0.01),
                  version='oc',
                  **kwargs):
+        self.start_level=start_level
         self.version = version
         super(RotatedRPNHead, self).__init__(
             1, in_channels, init_cfg=init_cfg, **kwargs)
@@ -39,6 +41,9 @@ class RotatedRPNHead(AnchorHead):
         self.rpn_cls = nn.Conv2d(self.feat_channels,
                                  self.num_anchors * self.cls_out_channels, 1)
         self.rpn_reg = nn.Conv2d(self.feat_channels, self.num_anchors * 4, 1)
+    
+    def forward(self, feats):
+        return multi_apply(self.forward_single, feats[self.start_level:])
 
     def forward_single(self, x):
         """Forward feature map of a single scale level."""

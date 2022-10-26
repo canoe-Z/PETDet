@@ -107,7 +107,8 @@ class RotatedDoubleConvFCBBoxHead(RotatedBBoxHead):
                      ]),
                  **kwargs):
         kwargs.setdefault('with_avg_pool', True)
-        super(RotatedDoubleConvFCBBoxHead, self).__init__(init_cfg=init_cfg, **kwargs)
+        super(RotatedDoubleConvFCBBoxHead, self).__init__(
+            init_cfg=init_cfg, **kwargs)
         assert self.with_avg_pool
         assert num_convs > 0
         assert num_fcs > 0

@@ -99,8 +99,6 @@ class CustomRotatedSingleRoIExtractor(BaseRoIExtractor):
         Returns:
             Tensor: Level index (0-based) of each RoI, shape (k, )
         """
-        # scale = torch.sqrt(
-        #     (rois[:, 3] - rois[:, 1]) * (rois[:, 4] - rois[:, 2]))
         scale = torch.sqrt(rois[:, 3] * rois[:, 4])
         target_lvls = torch.floor(torch.log2(scale / self.finest_scale + 1e-6))
         target_lvls = target_lvls.clamp(min=0, max=num_levels - 1).long()
@@ -122,7 +120,7 @@ class CustomRotatedSingleRoIExtractor(BaseRoIExtractor):
             out_size = nn.modules.utils._pair(self.roi_layers[0].out_size)
         else:
             out_size = self.roi_layers[0].output_size
-        num_levels = len(feats)-1
+        num_levels = len(feats)
         expand_dims = (-1, self.out_channels * out_size[0] * out_size[1])
         if torch.onnx.is_in_onnx_export():
             # Work around to export mask-rcnn to onnx
@@ -143,7 +141,7 @@ class CustomRotatedSingleRoIExtractor(BaseRoIExtractor):
                 return roi_feats
             return self.roi_layers[0](feats[0], rois)
 
-        target_lvls = self.map_roi_levels(rois, num_levels)+1
+        target_lvls = self.map_roi_levels(rois, num_levels)
         if roi_scale_factor is not None:
             rois = self.roi_rescale(rois, roi_scale_factor)
         for i in range(num_levels):

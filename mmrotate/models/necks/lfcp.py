@@ -8,7 +8,7 @@ from mmcv.ops.carafe import CARAFEPack
 from mmcv.runner import BaseModule, ModuleList
 
 from ..builder import ROTATED_NECKS
-
+from icecream import ic
 
 @ROTATED_NECKS.register_module()
 class LFCP(BaseModule):

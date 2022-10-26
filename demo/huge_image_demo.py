@@ -20,7 +20,7 @@ from mmrotate.apis import inference_detector_by_patches
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('img', help='Image file')
+    parser.add_argument('img_folder', help='Image file')
     parser.add_argument('config', help='Config file')
     parser.add_argument('checkpoint', help='Checkpoint file')
     parser.add_argument('--out-file', default=None, help='Path to output file')

@@ -143,5 +143,4 @@ data = dict(
     val=dict(version=angle_version),
     test=dict(version=angle_version))
 
-#optimizer = dict(lr=0.005)
 optimizer = dict(lr=0.02)

@@ -3,4 +3,5 @@ from .rotate_single_level_roi_extractor import RotatedSingleRoIExtractor
 from .rotate_single_level_roi_extractor_with_fpn import RotatedSingleRoIExtractorFPN
 from .custom_rotate_single_level_roi_extractor import CustomRotatedSingleRoIExtractor
 from .decouple_rotate_single_level_roi_extractor import DecoupleRotatedSingleRoIExtractor
+from .rotate_single_level_roi_extractor_with_backbone import RotatedSingleRoIExtractorWithBackbone
 __all__ = ['RotatedSingleRoIExtractor']

@@ -32,7 +32,7 @@ model = dict(
         center_sampling=False,
         center_sample_radius=1.5,
         norm_on_bbox=False,
-        centerness_on_reg=False,
+        centerness_on_reg=True,
         scale_angle=True,
         bbox_coder=dict(
             type='DistanceAnglePointCoder', angle_version=angle_version),
