@@ -25,7 +25,7 @@ class RotatedFCOSRPNHead(RotatedFCOSHeadMy):
                     bias_prob=0.09)),
             **kwargs)
 
-    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'theta_preds', 'centernesses'))
+    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'centernesses'))
     def loss(self,
              cls_scores,
              bbox_preds,
@@ -134,7 +134,7 @@ class RotatedFCOSRPNHead(RotatedFCOSHeadMy):
                 scores.new_full((scores.size(0), ),
                                 level_idx,
                                 dtype=torch.long))
-                                
+
         return self._bbox_post_process(mlvl_scores, mlvl_bbox_preds,
                                        mlvl_valid_points, level_ids, cfg,
                                        img_shape)

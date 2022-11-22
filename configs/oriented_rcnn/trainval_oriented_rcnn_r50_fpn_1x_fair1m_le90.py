@@ -2,8 +2,6 @@ _base_ = [
     './oriented_rcnn_r50_fpn_1x_fair1m_le90.py'
 ]
 
-fp16 = dict(loss_scale='dynamic')
-
 # dataset settings
 dataset_type = 'FAIR1MDataset'
 data_root = './data/split_ss_fair1m2_0/'
@@ -34,7 +32,7 @@ test_pipeline = [
         ])
 ]
 data = dict(
-    samples_per_gpu=2,
+    samples_per_gpu=4,
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,

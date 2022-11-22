@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/datasets/fair1mv2.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/fair1mv2_trainval.py', '../_base_/schedules/schedule_1x.py',
     '../_base_/default_runtime.py'
 ]
 
@@ -43,7 +43,7 @@ model = dict(
     roi_head=dict(
         type='LFFDecoupleHeadRoIHead',
         bbox_roi_extractor=dict(
-            type='RotatedSingleRoIExtractorWithBackbone',
+            type='RotatedLFFRoIExtractor',
             roi_layer=dict(
                 type='RoIAlignRotated',
                 out_size=7,

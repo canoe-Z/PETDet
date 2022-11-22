@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/datasets/fair1mv2.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/fair1mv2_trainval.py', '../_base_/schedules/schedule_1x.py',
     '../_base_/default_runtime.py'
 ]
 
@@ -190,6 +190,8 @@ train_pipeline = [
     dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels'])
 ]
 data = dict(
+    samples_per_gpu=2,
+    workers_per_gpu=2,
     train=dict(pipeline=train_pipeline, version=angle_version),
     val=dict(version=angle_version),
     test=dict(version=angle_version))

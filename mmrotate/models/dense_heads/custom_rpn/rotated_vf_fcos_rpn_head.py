@@ -126,22 +126,6 @@ class RotatedVFFCOSRPNHead(RotatedVFFCOSHead):
                                 level_idx,
                                 dtype=torch.long))
 
-            if cfg.nms_pre > 0 and scores.shape[0] > cfg.nms_pre:
-                # sort is faster than topk
-                # _, topk_inds = scores.topk(cfg.nms_pre)
-                ranked_scores, rank_inds = scores.sort(descending=True)
-                topk_inds = rank_inds[:cfg.nms_pre]
-                scores = ranked_scores[:cfg.nms_pre]
-                rpn_bbox_pred = rpn_bbox_pred[topk_inds, :]
-                points = points[topk_inds, :]
-            mlvl_scores.append(scores)
-            mlvl_bbox_preds.append(rpn_bbox_pred)
-            mlvl_valid_points.append(points)
-            level_ids.append(
-                scores.new_full((scores.size(0), ),
-                                level_idx,
-                                dtype=torch.long))
-
         return self._bbox_post_process(mlvl_scores, mlvl_bbox_preds,
                                        mlvl_valid_points, level_ids, cfg,
                                        img_shape)

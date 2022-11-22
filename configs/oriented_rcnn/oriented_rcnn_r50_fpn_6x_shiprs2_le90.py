@@ -1,12 +1,13 @@
 _base_ = [
-    '../_base_/datasets/mar20.py', '../_base_/schedules/schedule_3x.py',
+    '../_base_/datasets/shiprs2.py', '../_base_/schedules/schedule_6x.py',
     '../_base_/default_runtime.py'
 ]
+
 angle_version = 'le90'
 model = dict(
-    type='OrientedRCNNLFF',
+    type='OrientedRCNN',
     backbone=dict(
-        type='LowlResNet',
+        type='ResNet',
         depth=50,
         num_stages=4,
         out_indices=(0, 1, 2, 3),
@@ -40,23 +41,22 @@ model = dict(
         loss_bbox=dict(
             type='SmoothL1Loss', beta=0.1111111111111111, loss_weight=1.0)),
     roi_head=dict(
-        type='LFFDecoupleHeadRoIHead',
+        type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(
-            type='RotatedLFFRoIExtractor',
+            type='RotatedSingleRoIExtractor',
             roi_layer=dict(
                 type='RoIAlignRotated',
                 out_size=7,
                 sample_num=2,
                 clockwise=True),
-            out_channels=512,
-            featmap_strides=[4, 8, 16, 32],
-            lowlevel_featmap_stride=2),
+            out_channels=256,
+            featmap_strides=[4, 8, 16, 32]),
         bbox_head=dict(
             type='RotatedShared2FCBBoxHead',
-            in_channels=512,
+            in_channels=256,
             fc_out_channels=1024,
             roi_feat_size=7,
-            num_classes=20,
+            num_classes=25,
             bbox_coder=dict(
                 type='DeltaXYWHAOBBoxCoder',
                 angle_range=angle_version,

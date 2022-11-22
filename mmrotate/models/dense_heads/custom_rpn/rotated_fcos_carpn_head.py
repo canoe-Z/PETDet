@@ -101,7 +101,8 @@ class RotatedFCOSCARPNHead(RotatedFCOSHead):
             assert rpn_cls_score.size()[-2:] == rpn_bbox_pred.size()[-2:]
             rpn_cls_score = rpn_cls_score.permute(1, 2, 0)
             if self.use_sigmoid_cls:
-                rpn_cls_score = rpn_cls_score.reshape(-1, self.cls_out_channels)
+                rpn_cls_score = rpn_cls_score.reshape(-1,
+                                                      self.cls_out_channels)
                 rpn_centerness = rpn_centerness.reshape(-1)
                 scores = rpn_cls_score.sigmoid()
                 max_scores, _ = scores.max(dim=1)

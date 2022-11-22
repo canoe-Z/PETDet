@@ -26,6 +26,7 @@ class RotatedStandardRoIHead(BaseModule, metaclass=ABCMeta):
     """
 
     def __init__(self,
+                 start_level=0,
                  bbox_roi_extractor=None,
                  bbox_head=None,
                  shared_head=None,
@@ -39,6 +40,7 @@ class RotatedStandardRoIHead(BaseModule, metaclass=ABCMeta):
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.version = version
+        self.start_level = start_level
 
         if shared_head is not None:
             shared_head.pretrained = pretrained
@@ -167,7 +169,7 @@ class RotatedStandardRoIHead(BaseModule, metaclass=ABCMeta):
             dict[str, Tensor]: a dictionary of bbox_results.
         """
         bbox_feats = self.bbox_roi_extractor(
-            x[:self.bbox_roi_extractor.num_inputs], rois)
+            x[self.start_level:self.start_level + self.bbox_roi_extractor.num_inputs], rois)
         if self.with_shared_head:
             bbox_feats = self.shared_head(bbox_feats)
         cls_score, bbox_pred = self.bbox_head(bbox_feats)

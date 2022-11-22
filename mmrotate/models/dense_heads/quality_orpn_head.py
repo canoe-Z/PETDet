@@ -1,20 +1,23 @@
-# Copyright (c) OpenMMLab. All rights reserved.
-
+import copy
 import torch
 import torch.nn as nn
-from mmcv.cnn import Scale
+import torch.nn.functional as F
+from mmcv.cnn import ConvModule, Scale, bias_init_with_prob, normal_init
+from mmcv.ops import batched_nms
 from mmcv.runner import force_fp32
 from mmdet.core import multi_apply, reduce_mean
+from mmdet.models.dense_heads.tood_head import TaskDecomposition
 
-from ..builder import ROTATED_HEADS, build_loss
+from mmrotate.core import obb2xyxy
 from mmrotate.core.bbox import rbbox_overlaps
+from ..builder import ROTATED_HEADS, build_loss
 from .oriented_anchor_free_head import OrientedAnchorFreeHead
 
 INF = 1e8
 
 
 @ROTATED_HEADS.register_module()
-class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
+class QualityOrientedRPNHead(OrientedAnchorFreeHead):
     """Anchor-free head used in `FCOS <https://arxiv.org/abs/1904.01355>`_.
     The FCOS head does not use anchor boxes. Instead bounding boxes are
     predicted at each pixel and a centerness measure is used to suppress
@@ -55,78 +58,108 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
     """  # noqa: E501
 
     def __init__(self,
-                 num_classes,
                  in_channels,
+                 num_dcn=0,
                  start_level=0,
                  regress_ranges=((-1, 64), (64, 128), (128, 256), (256, 512),
                                  (512, INF)),
                  angle_version='le90',
                  center_sampling=False,
                  center_sample_radius=1.5,
-                 norm_on_bbox=False,
-                 centerness_on_reg=False,
+                 shrink_sampling=False,
+                 shrink_sigma=[0, 0.15, 0.3, 0.45, 0.6],
                  scale_angle=True,
                  loss_cls=dict(
                      type='FocalLoss',
                      use_sigmoid=True,
                      gamma=2.0,
                      alpha=0.25,
-                     loss_weight=1.0),
-                 use_vfl=False,
+                     loss_weight=0.5),
+                 use_vfl=True,
                  loss_cls_vfl=dict(
                      type='VarifocalLoss',
                      use_sigmoid=True,
                      alpha=0.75,
                      gamma=2.0,
                      iou_weighted=True,
-                     loss_weight=1.0),
-                 loss_bbox=dict(type='RotatedIoULoss', loss_weight=1.0),
-                 loss_centerness=dict(
-                     type='CrossEntropyLoss',
-                     use_sigmoid=True,
-                     loss_weight=1.0),
+                     loss_weight=0.5),
+                 loss_bbox=dict(type='RotatedIoULoss', loss_weight=0.5),
                  norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-                 init_cfg=dict(
-                     type='Normal',
-                     layer='Conv2d',
-                     std=0.01,
-                     override=dict(
-                         type='Normal',
-                         name='conv_cls',
-                         std=0.01,
-                         bias_prob=0.01)),
                  **kwargs):
+        self.num_dcn = num_dcn
         self.regress_ranges = regress_ranges
         self.center_sampling = center_sampling
         self.center_sample_radius = center_sample_radius
-        self.norm_on_bbox = norm_on_bbox
-        self.centerness_on_reg = centerness_on_reg
+        self.shrink_sampling = shrink_sampling
+        self.shrink_sigma = shrink_sigma
         self.start_level = start_level
         self.scale_angle = scale_angle
-        self.angle_version=angle_version
+        self.angle_version = angle_version
 
-        super().__init__(
-            num_classes,
-            in_channels,
-            reg_dim=4,
+        super(QualityOrientedRPNHead, self).__init__(
+            num_classes=1,
+            in_channels=in_channels,
             loss_cls=loss_cls,
             loss_bbox=loss_bbox,
             norm_cfg=norm_cfg,
-            init_cfg=init_cfg,
             **kwargs)
-        self.loss_centerness = build_loss(loss_centerness)
         self.use_vfl = use_vfl
         if self.use_vfl:
             self.loss_cls = build_loss(loss_cls_vfl)
 
     def _init_layers(self):
         """Initialize layers of the head."""
-        super()._init_layers()
-        self.conv_centerness = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
-        self.conv_theta = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
+        #self.relu = nn.ReLU(inplace=True)
+        self.inter_convs = nn.ModuleList()
+        for i in range(self.stacked_convs):
+            if i < self.num_dcn:
+                conv_cfg = dict(type='DCNv2', deform_groups=4)
+            else:
+                conv_cfg = self.conv_cfg
+            chn = self.in_channels if i == 0 else self.feat_channels
+            self.inter_convs.append(
+                ConvModule(
+                    chn,
+                    self.feat_channels,
+                    3,
+                    stride=1,
+                    padding=1,
+                    conv_cfg=conv_cfg,
+                    norm_cfg=self.norm_cfg))
+
+        self.cls_decomp = TaskDecomposition(self.feat_channels,
+                                            self.stacked_convs,
+                                            self.stacked_convs * 8,
+                                            self.conv_cfg, self.norm_cfg)
+        self.reg_decomp = TaskDecomposition(self.feat_channels,
+                                            self.stacked_convs,
+                                            self.stacked_convs * 8,
+                                            self.conv_cfg, self.norm_cfg)
+
+        self.tood_cls = nn.Conv2d(
+            self.feat_channels,
+            self.num_base_priors * self.cls_out_channels,
+            3,
+            padding=1)
+        self.tood_reg = nn.Conv2d(
+            self.feat_channels, self.num_base_priors * 4, 3, padding=1)
+        self.tood_angle = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
         self.scales = nn.ModuleList([Scale(1.0) for _ in self.strides])
         if self.scale_angle:
             self.scale_angle = Scale(1.0)
+
+    def init_weights(self):
+        """Initialize weights of the head."""
+        bias_cls = bias_init_with_prob(0.09)
+        for m in self.inter_convs:
+            normal_init(m.conv, std=0.01)
+
+        self.cls_decomp.init_weights()
+        self.reg_decomp.init_weights()
+
+        normal_init(self.tood_cls, std=0.01, bias=bias_cls)
+        normal_init(self.tood_reg, std=0.01)
+        normal_init(self.tood_angle, std=0.01)
 
     def forward(self, feats):
         """Forward features from the upstream network.
@@ -161,36 +194,32 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
             tuple: scores for each class, bbox predictions and centerness \
                 predictions of input feature maps.
         """
-        cls_score, bbox_pred, cls_feat, reg_feat = super().forward_single(x)
-        if self.centerness_on_reg:
-            centerness = self.conv_centerness(reg_feat)
-        else:
-            centerness = self.conv_centerness(cls_feat)
-        # scale the bbox_pred of different level
-        # float to avoid overflow when enabling FP16
-        bbox_pred = scale(bbox_pred).float()
-        if self.norm_on_bbox:
-            # bbox_pred needed for gradient computation has been modified
-            # by F.relu(bbox_pred) when run with PyTorch 1.10. So replace
-            # F.relu(bbox_pred) with bbox_pred.clamp(min=0)
-            bbox_pred = bbox_pred.clamp(min=0)
-            if not self.training:
-                bbox_pred *= stride
-        else:
-            bbox_pred = bbox_pred.exp()
-        angle_pred = self.conv_theta(reg_feat)
+        inter_feats = []
+        for inter_conv in self.inter_convs:
+            x = inter_conv(x)
+            inter_feats.append(x)
+        feat = torch.cat(inter_feats, 1)
+
+        # task decomposition
+        avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
+        cls_feat = self.cls_decomp(feat, avg_feat)
+        reg_feat = self.reg_decomp(feat, avg_feat)
+
+        # prediction
+        cls_score = self.tood_cls(cls_feat)
+        bbox_pred = scale(self.tood_reg(reg_feat).exp()).float()
+        angle_pred = self.tood_angle(reg_feat)
         if self.scale_angle:
             angle_pred = self.scale_angle(angle_pred).float()
         bbox_pred = torch.cat([bbox_pred, angle_pred], dim=1)
-        return cls_score, bbox_pred, centerness
 
-    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'centernesses'))
+        return cls_score, bbox_pred
+
+    @force_fp32(apply_to=('cls_scores', 'bbox_preds'))
     def loss(self,
              cls_scores,
              bbox_preds,
-             centernesses,
              gt_bboxes,
-             gt_labels,
              img_metas,
              gt_bboxes_ignore=None):
         """Compute loss of the head.
@@ -213,7 +242,8 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
-        assert len(cls_scores) == len(bbox_preds) == len(centernesses)
+        assert len(cls_scores) == len(bbox_preds)
+        gt_labels = None
         featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
         all_level_points = self.prior_generator.grid_priors(
             featmap_sizes,
@@ -232,13 +262,8 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
             bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
             for bbox_pred in bbox_preds
         ]
-        flatten_centerness = [
-            centerness.permute(0, 2, 3, 1).reshape(-1)
-            for centerness in centernesses
-        ]
         flatten_cls_scores = torch.cat(flatten_cls_scores)
         flatten_bbox_preds = torch.cat(flatten_bbox_preds)
-        flatten_centerness = torch.cat(flatten_centerness)
         flatten_labels = torch.cat(labels)
         flatten_bbox_targets = torch.cat(bbox_targets)
         # repeat points to align with bbox_preds
@@ -252,11 +277,8 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
         num_pos = torch.tensor(
             len(pos_inds), dtype=torch.float, device=bbox_preds[0].device)
         num_pos = max(reduce_mean(num_pos), 1.0)
-        # loss_cls = self.loss_cls(
-        #     flatten_cls_scores, flatten_labels, avg_factor=num_pos)
 
         pos_bbox_preds = flatten_bbox_preds[pos_inds]
-        pos_centerness = flatten_centerness[pos_inds]
         pos_bbox_targets = flatten_bbox_targets[pos_inds]
         pos_centerness_targets = self.centerness_target(pos_bbox_targets)
         # centerness weighted iou loss
@@ -266,7 +288,7 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
         if len(pos_inds) > 0:
             pos_points = flatten_points[pos_inds]
             pos_decoded_bbox_preds = self.bbox_coder.decode(pos_points,
-                                                       pos_bbox_preds)
+                                                            pos_bbox_preds)
             pos_decoded_target_preds = self.bbox_coder.decode(
                 pos_points, pos_bbox_targets)
             loss_bbox = self.loss_bbox(
@@ -274,12 +296,10 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
                 pos_decoded_target_preds,
                 weight=pos_centerness_targets,
                 avg_factor=centerness_denorm)
-            loss_centerness = self.loss_centerness(
-                pos_centerness, pos_centerness_targets, avg_factor=num_pos)
 
             # build IoU-aware cls_score targets
             if self.use_vfl:
-                iou_targets_ini = rbbox_overlaps(                     
+                iou_targets_ini = rbbox_overlaps(
                     pos_decoded_bbox_preds.detach(),
                     pos_decoded_target_preds.detach(),
                     is_aligned=True).clamp(min=1e-6).view(-1)
@@ -290,7 +310,6 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
                 cls_iou_targets[pos_inds, pos_labels] = pos_ious
         else:
             loss_bbox = pos_bbox_preds.sum()
-            loss_centerness = pos_centerness.sum()
             if self.use_vfl:
                 cls_iou_targets = torch.zeros_like(flatten_cls_scores)
 
@@ -302,9 +321,8 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
                 flatten_cls_scores, flatten_labels, avg_factor=num_pos)
 
         return dict(
-            loss_cls=loss_cls,
-            loss_bbox=loss_bbox,
-            loss_centerness=loss_centerness)
+            loss_rpn_cls=loss_cls,
+            loss_rpn_bbox=loss_bbox)
 
     def get_targets(self, points, gt_bboxes_list, gt_labels_list):
         """Compute regression, classification and centerness targets for points
@@ -364,8 +382,8 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
                 torch.cat([labels[i] for labels in labels_list]))
             bbox_targets = torch.cat(
                 [bbox_targets[i] for bbox_targets in bbox_targets_list])
-            if self.norm_on_bbox:
-                bbox_targets[:, :4] = bbox_targets[:, :4] / self.strides[i]
+            # if self.norm_on_bbox:
+            #     bbox_targets[:, :4] = bbox_targets[:, :4] / self.strides[i]
             concat_lvl_bbox_targets.append(bbox_targets)
         return concat_lvl_labels, concat_lvl_bbox_targets
 
@@ -420,6 +438,24 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
             inside_center_bbox_mask = (abs(offset) < stride).all(dim=-1)
             inside_gt_bbox_mask = torch.logical_and(inside_center_bbox_mask,
                                                     inside_gt_bbox_mask)
+        elif self.shrink_sampling:
+            w_shrink = offset_x.new_zeros(offset_x.shape)
+            h_shrink = offset_y.new_zeros(offset_y.shape)
+
+            # project the points on current lvl back to the `original` sizes
+            lvl_begin = 0
+            for lvl_idx, num_points_lvl in enumerate(num_points_per_lvl):
+                lvl_end = lvl_begin + num_points_lvl
+                w_shrink[lvl_begin:lvl_end] = (
+                    1-self.shrink_sigma[lvl_idx]) * w[lvl_begin:lvl_end]
+                h_shrink[lvl_begin:lvl_end] = (
+                    1-self.shrink_sigma[lvl_idx]) * h[lvl_begin:lvl_end]
+                lvl_begin = lvl_end
+
+            inside_shrink_bbox_mask = ((torch.abs(offset_x) < w_shrink/2)
+                                       & (torch.abs(offset_y) < h_shrink/2))
+            inside_gt_bbox_mask = torch.logical_and(inside_shrink_bbox_mask,
+                                                    inside_gt_bbox_mask)
 
         # condition2: limit the regression range for each location
         max_regress_distance = bbox_targets.max(-1)[0]
@@ -442,7 +478,7 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
 
         theta_targets = gt_angle[range(num_points), min_area_inds]
         bbox_targets = torch.cat([bbox_targets, theta_targets], dim=1)
-        
+
         return labels, bbox_targets
 
     def centerness_target(self, pos_bbox_targets):
@@ -465,4 +501,145 @@ class RotatedFCOSHeadMy(OrientedAnchorFreeHead):
                     top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
         return torch.sqrt(centerness_targets)
 
-   
+    def _get_bboxes_single(self,
+                           cls_score_list,
+                           bbox_pred_list,
+                           score_factor_list,
+                           mlvl_priors,
+                           img_meta,
+                           cfg,
+                           rescale=False,
+                           with_nms=True,
+                           **kwargs):
+        """Transform outputs of a single image into bbox predictions.
+
+        Args:
+            cls_score_list (list[Tensor]): Box scores from all scale
+                levels of a single image, each item has shape
+                (num_anchors * num_classes, H, W).
+            bbox_pred_list (list[Tensor]): Box energies / deltas from
+                all scale levels of a single image, each item has
+                shape (num_anchors * 4, H, W).
+            score_factor_list (list[Tensor]): Score factor from all scale
+                levels of a single image. RPN head does not need this value.
+            mlvl_anchors (list[Tensor]): Anchors of all scale level
+                each item has shape (num_anchors, 4).
+            img_meta (dict): Image meta info.
+            cfg (mmcv.Config): Test / postprocessing configuration,
+                if None, test_cfg would be used.
+            rescale (bool): If True, return boxes in original image space.
+                Default: False.
+            with_nms (bool): If True, do nms before return boxes.
+                Default: True.
+
+        Returns:
+            Tensor: Labeled boxes in shape (n, 5), where the first 4 columns
+                are bounding box positions (tl_x, tl_y, br_x, br_y) and the
+                5-th column is a score between 0 and 1.
+        """
+        cfg = self.test_cfg if cfg is None else cfg
+        cfg = copy.deepcopy(cfg)
+        img_shape = img_meta['img_shape']
+
+        # bboxes from different level should be independent during NMS,
+        # level_ids are used as labels for batched NMS to separate them
+        level_ids = []
+        mlvl_scores = []
+        mlvl_bbox_preds = []
+        mlvl_valid_points = []
+
+        for level_idx in range(len(cls_score_list)):
+            rpn_cls_score = cls_score_list[level_idx]
+            rpn_bbox_pred = bbox_pred_list[level_idx]
+            assert rpn_cls_score.size()[-2:] == rpn_bbox_pred.size()[-2:]
+            rpn_cls_score = rpn_cls_score.permute(1, 2, 0)
+            if self.use_sigmoid_cls:
+                rpn_cls_score = rpn_cls_score.reshape(-1)
+                scores = rpn_cls_score.sigmoid()
+            else:
+                rpn_cls_score = rpn_cls_score.reshape(-1, 2)
+                # We set FG labels to [0, num_class-1] and BG label to
+                # num_class in RPN head since mmdet v2.5, which is unified to
+                # be consistent with other head since mmdet v2.0. In mmdet v2.0
+                # to v2.4 we keep BG label as 0 and FG label as 1 in rpn head.
+                scores = rpn_cls_score.softmax(dim=1)[:, 0]
+            rpn_bbox_pred = rpn_bbox_pred.permute(
+                1, 2, 0).reshape(-1, 5)
+
+            points = mlvl_priors[level_idx]
+            if cfg.nms_pre > 0 and scores.shape[0] > cfg.nms_pre:
+                # sort is faster than topk
+                # _, topk_inds = scores.topk(cfg.nms_pre)
+                ranked_scores, rank_inds = scores.sort(descending=True)
+                topk_inds = rank_inds[:cfg.nms_pre]
+                scores = ranked_scores[:cfg.nms_pre]
+                rpn_bbox_pred = rpn_bbox_pred[topk_inds, :]
+                points = points[topk_inds, :]
+
+            mlvl_scores.append(scores)
+            mlvl_bbox_preds.append(rpn_bbox_pred)
+            mlvl_valid_points.append(points)
+            level_ids.append(
+                scores.new_full((scores.size(0), ),
+                                level_idx,
+                                dtype=torch.long))
+
+        return self._bbox_post_process(mlvl_scores, mlvl_bbox_preds,
+                                       mlvl_valid_points, level_ids, cfg,
+                                       img_shape)
+
+    def _bbox_post_process(self, mlvl_scores, mlvl_bboxes, mlvl_valid_points,
+                           level_ids, cfg, img_shape, **kwargs):
+        """bbox post-processing method.
+
+        The boxes would be rescaled to the original image scale and do
+        the nms operation. Usually with_nms is False is used for aug test.
+
+        Args:
+            mlvl_scores (list[Tensor]): Box scores from all scale
+                levels of a single image, each item has shape
+                (num_bboxes, num_class).
+            mlvl_bboxes (list[Tensor]): Decoded bboxes from all scale
+                levels of a single image, each item has shape (num_bboxes, 4).
+            mlvl_valid_anchors (list[Tensor]): Anchors of all scale level
+                each item has shape (num_bboxes, 4).
+            level_ids (list[Tensor]): Indexes from all scale levels of a
+                single image, each item has shape (num_bboxes, ).
+            cfg (mmcv.Config): Test / postprocessing configuration,
+                if None, test_cfg would be used.
+            img_shape (tuple(int)): Shape of current image.
+
+        Returns:
+            Tensor: Labeled boxes in shape (n, 5), where the first 4 columns
+                are bounding box positions (tl_x, tl_y, br_x, br_y) and the
+                5-th column is a score between 0 and 1.
+        """
+        scores = torch.cat(mlvl_scores)
+        points = torch.cat(mlvl_valid_points)
+        rpn_bbox_pred = torch.cat(mlvl_bboxes)
+        proposals = self.bbox_coder.decode(points, rpn_bbox_pred)
+        ids = torch.cat(level_ids)
+
+        if cfg.min_bbox_size >= 0:
+            w, h = proposals[:, 2], proposals[:, 3]
+            valid_mask = (w > cfg.min_bbox_size) & (h > cfg.min_bbox_size)
+            if not valid_mask.all():
+                proposals = proposals[valid_mask]
+                scores = scores[valid_mask]
+                ids = ids[valid_mask]
+
+        # if cfg.score_thr > 0:
+        #     valid_mask = scores > cfg.score_thr
+        #     if not valid_mask.all():
+        #         proposals = proposals[valid_mask]
+        #         scores = scores[valid_mask]
+        #         ids = ids[valid_mask]
+
+        if proposals.numel() > 0:
+            hproposals = obb2xyxy(proposals, self.angle_version)
+            _, keep = batched_nms(hproposals, scores, ids, cfg.nms)
+            dets = torch.cat([proposals, scores[:, None]], dim=1)
+            dets = dets[keep]
+            return dets[:cfg.max_per_img]
+        else:
+            return proposals.new_zeros(0, 5)

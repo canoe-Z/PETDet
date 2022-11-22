@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .rotate_single_level_roi_extractor import RotatedSingleRoIExtractor
 from .rotate_single_level_roi_extractor_with_fpn import RotatedSingleRoIExtractorFPN
-from .custom_rotate_single_level_roi_extractor import CustomRotatedSingleRoIExtractor
+from .sffm_rotate_single_level_roi_extractor import SFFMRotatedSingleRoIExtractor
 from .decouple_rotate_single_level_roi_extractor import DecoupleRotatedSingleRoIExtractor
 from .rotate_single_level_roi_extractor_with_backbone import RotatedSingleRoIExtractorWithBackbone
+from .rotate_lff_roi_extractor import RotatedLFFRoIExtractor
+
 __all__ = ['RotatedSingleRoIExtractor']

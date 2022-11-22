@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from mmcv.cnn import ConvModule
 from mmcv.runner import force_fp32
+
 from mmdet.core import multi_apply
 from mmrotate.core import build_bbox_coder
 from mmdet.core.anchor.point_generator import MlvlPointGenerator
@@ -15,7 +16,7 @@ from .rotated_base_dense_head import RotatedBaseDenseHead
 
 
 @ROTATED_HEADS.register_module()
-class RotatedAnchorFreeHeadMy(RotatedBaseDenseHead, BBoxTestMixin):
+class OrientedAnchorFreeHead(RotatedBaseDenseHead, BBoxTestMixin):
     """Anchor-free head (FCOS, Fovea, RepPoints, etc.).
 
     Args:
@@ -45,7 +46,7 @@ class RotatedAnchorFreeHeadMy(RotatedBaseDenseHead, BBoxTestMixin):
                  num_classes,
                  in_channels,
                  feat_channels=256,
-                 reg_dim=5,
+                 reg_dim=4,
                  stacked_convs=4,
                  strides=(4, 8, 16, 32, 64),
                  dcn_on_last_conv=False,
@@ -56,7 +57,7 @@ class RotatedAnchorFreeHeadMy(RotatedBaseDenseHead, BBoxTestMixin):
                      gamma=2.0,
                      alpha=0.25,
                      loss_weight=1.0),
-                 loss_bbox=dict(type='PolyIoULoss', loss_weight=1.0),
+                 loss_bbox=dict(type='RotatedIoULoss', loss_weight=1.0),
                  bbox_coder=dict(type='RotatedDistancePointBBoxCoder'),
                  conv_cfg=None,
                  norm_cfg=None,
@@ -71,7 +72,7 @@ class RotatedAnchorFreeHeadMy(RotatedBaseDenseHead, BBoxTestMixin):
                          name='conv_cls',
                          std=0.01,
                          bias_prob=0.01))):
-        super(RotatedAnchorFreeHeadMy, self).__init__(init_cfg)
+        super(OrientedAnchorFreeHead, self).__init__(init_cfg)
         self.num_classes = num_classes
         self.use_sigmoid_cls = loss_cls.get('use_sigmoid', False)
         if self.use_sigmoid_cls:
@@ -331,3 +332,21 @@ class RotatedAnchorFreeHeadMy(RotatedBaseDenseHead, BBoxTestMixin):
                 self._get_points_single(featmap_sizes[i], self.strides[i],
                                         dtype, device, flatten))
         return mlvl_points
+
+    def aug_test(self, feats, img_metas, rescale=False):
+        """Test function with test time augmentation.
+
+        Args:
+            feats (list[Tensor]): the outer list indicates test-time
+                augmentations and inner Tensor should have a shape NxCxHxW,
+                which contains features for all images in the batch.
+            img_metas (list[list[dict]]): the outer list indicates test-time
+                augs (multiscale, flip, etc.) and the inner list indicates
+                images in a batch. each dict has image information.
+            rescale (bool, optional): Whether to rescale the results.
+                Defaults to False.
+
+        Returns:
+            list[ndarray]: bbox results of each class
+        """
+        return self.aug_test_bboxes(feats, img_metas, rescale=rescale)

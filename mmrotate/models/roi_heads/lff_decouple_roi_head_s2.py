@@ -12,62 +12,9 @@ from ..builder import (ROTATED_HEADS, build_head, build_roi_extractor,
 
 import torch.nn.functional as F
 import torch.nn as nn
-from mmcv.cnn import ConvModule, build_upsample_layer, xavier_init
+from mmcv.cnn import ConvModule, xavier_init
 from mmcv.cnn.bricks import build_plugin_layer
-from mmcv.ops.carafe import CARAFEPack
-from mmcv.runner import BaseModule, ModuleList
-
-
-class DownSample(BaseModule):
-    def __init__(self,
-                 in_channels,
-                 conv_cfg=None,
-                 norm_cfg=None,
-                 act_cfg=None):
-        super().__init__(DownSample)
-        inter_dim = in_channels // 2
-        self.maxpool = nn.MaxPool2d((2, 2), 2)
-        self.conv1 = ConvModule(
-            in_channels,
-            inter_dim,
-            1,
-            conv_cfg=conv_cfg,
-            norm_cfg=norm_cfg,
-            act_cfg=act_cfg)
-        self.conv2 = nn.Sequential(
-            ConvModule(
-                in_channels,
-                inter_dim,
-                1,
-                conv_cfg=conv_cfg,
-                norm_cfg=norm_cfg,
-                act_cfg=act_cfg),
-            ConvModule(
-                inter_dim,
-                inter_dim,
-                3,
-                2,
-                1,
-                conv_cfg=conv_cfg,
-                norm_cfg=norm_cfg,
-                act_cfg=act_cfg)
-        )
-
-    def forward(self, x):
-        """
-        Input:
-            x: [B, C, H, W]
-        Output:
-            out: [B, C, H//2, W//2]
-        """
-        # [B, C, H, W] -> [B, C//2, H//2, W//2]
-        x1 = self.conv1(self.maxpool(x))
-        x2 = self.conv2(x)
-
-        # [B, C, H//2, W//2]
-        out = torch.cat([x1, x2], dim=1)
-
-        return out
+from mmcv.runner import BaseModule
 
 
 @ROTATED_HEADS.register_module()
@@ -86,7 +33,6 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
     """
 
     def __init__(self,
-                 start_level=0,
                  bbox_roi_extractor=None,
                  lowlevel_bbox_roi_extractor=None,
                  bbox_head=None,
@@ -97,15 +43,12 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
                  version='oc',
                  att_cfg=dict(type='ContextBlock',
                               in_channels=256, ratio=1. / 4),
-                 att_cfg1=dict(type='ContextBlock',
-                               in_channels=256, ratio=1. / 4),
-                 fpn_stride=4,
-                 fpn_upsample_cfg=dict(
-                     type='carafe',
-                     up_kernel=5,
-                     up_group=1,
-                     encoder_kernel=3,
-                     encoder_dilation=1),
+                 #  upsample_cfg=dict(
+                 #      type='carafe',
+                 #      up_kernel=5,
+                 #      up_group=1,
+                 #      encoder_kernel=3,
+                 #      encoder_dilation=1),
                  upsample_cfg=dict(mode='nearest'),
                  conv_cfg=None,
                  norm_cfg=None,
@@ -115,7 +58,6 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.version = version
-        self.start_level = start_level
 
         if shared_head is not None:
             shared_head.pretrained = pretrained
@@ -131,9 +73,6 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
         self.with_shared_head = True if shared_head is not None else False
 
         self.att_cfg = att_cfg
-        self.att_cfg1 = att_cfg1
-        self.fpn_stride = fpn_stride
-        self.fpn_upsample_cfg = fpn_upsample_cfg
         self.upsample_cfg = upsample_cfg
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
@@ -142,141 +81,57 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
 
     def init_fusion_module(self):
         out_channels = 256
-        # self.y_conv = ConvModule(
-        #     out_channels//4,
-        #     out_channels,
-        #     1,
-        #     conv_cfg=self.conv_cfg,
-        #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        #     act_cfg=self.act_cfg)
-
+        self.y_conv = ConvModule(
+            out_channels//4,
+            out_channels,
+            1,
+            conv_cfg=self.conv_cfg,
+            norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
+            act_cfg=self.act_cfg,
+            inplace=False)
         self.down_conv = ConvModule(
-            out_channels * 2,
+            out_channels*2,
             out_channels,
             1,
             conv_cfg=self.conv_cfg,
             norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
             act_cfg=dict(type='ReLU'),
             inplace=False)
-
-        # self.y_conv2 = ConvModule(
-        #     out_channels*2,
+        # self.fil_conv = ConvModule(
         #     out_channels,
-        #     1,
-        #     conv_cfg=self.conv_cfg,
-        #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        #     act_cfg=self.act_cfg)
-        # self.fusion_conv = ConvModule(
-        #     out_channels * 2,
         #     out_channels,
         #     3,
-        #     2,
-        #     1,
         #     conv_cfg=self.conv_cfg,
+        #     padding=1,
         #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
         #     act_cfg=dict(type='ReLU'),
         #     inplace=False)
-
-        # self.down_conv2 = ConvModule(
-        #     out_channels*2,
-        #     out_channels,
-        #     1,
-        #     conv_cfg=self.conv_cfg,
-        #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        #     act_cfg=self.act_cfg)
-        # self.dw_conv = ConvModule(
+        # self.fil_conv_1 = ConvModule(
         #     out_channels,
         #     out_channels,
         #     3,
-        #     2,
-        #     1,
-        #     groups=out_channels,
         #     conv_cfg=self.conv_cfg,
+        #     padding=1,
         #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        #     act_cfg=self.act_cfg)
-        # self.pw_conv = ConvModule(
-        #     out_channels,
-        #     out_channels,
-        #     1,
-        #     conv_cfg=self.conv_cfg,
-        #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        #     act_cfg=self.act_cfg)
-        self.fil_conv = ConvModule(
-            out_channels,
-            out_channels,
-            3,
-            conv_cfg=self.conv_cfg,
-            padding=1,
-            norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-            act_cfg=dict(type='ReLU'),
-            inplace=False)
-        self.fil_conv_1 = ConvModule(
-            out_channels,
-            out_channels,
-            3,
-            conv_cfg=self.conv_cfg,
-            padding=1,
-            norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-            act_cfg=dict(type='ReLU'),
-            inplace=False)
-        self.att_module = build_plugin_layer(self.att_cfg, '_att_module')[1]
-
-        if self.fpn_stride == 8:
-            # self.upsample_modules = ModuleList()
-            # upsample_cfg_ = self.fpn_upsample_cfg.copy()
-            # upsample_cfg_.update(channels=out_channels, scale_factor=2)
-            # self.upsample_module = build_upsample_layer(upsample_cfg_)
-            # self.down_conv2 = ConvModule(
-            #     out_channels*2,
-            #     out_channels,
-            #     1,
-            #     conv_cfg=self.conv_cfg,
-            #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-            #     act_cfg=dict(type='ReLU'),
-            #     inplace=False)
-            # self.l_conv = ConvModule(
-            #     out_channels,
-            #     out_channels,
-            #     1,
-            #     conv_cfg=None,
-            #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-            #     act_cfg=dict(type='ReLU'),
-            #     inplace=False)
-            self.fpn_conv = ConvModule(
-                out_channels,
-                out_channels,
-                3,
-                padding=1,
-                conv_cfg=None,
-                norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-                act_cfg=dict(type='ReLU'),
-                inplace=False)
-            self.fpn_conv_1 = ConvModule(
-                out_channels,
-                out_channels,
-                3,
-                padding=1,
-                conv_cfg=None,
-                norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-                act_cfg=dict(type='ReLU'),
-                inplace=False)
-            # # self.upsample_modules.append(upsample_module)
-            # self.att_module_1 = build_plugin_layer(
-            #     self.att_cfg1, '_att_module_1')[1]
-        #self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-
-        self.unshuffle = nn.PixelUnshuffle(2)
+        #     act_cfg=None,
+        #     inplace=False)
+        # self.att_module = build_plugin_layer(self.att_cfg, '_att_module')[1]
+        # self.upsample_modules = ModuleList()
+        # upsample_cfg_ = self.upsample_cfg.copy()
+        # upsample_cfg_.update(channels=out_channels, scale_factor=2)
+        # upsample_module = build_upsample_layer(upsample_cfg_)
+        # self.upsample_modules.append(upsample_module)
+        # self.att_module_1 = build_plugin_layer(
+        #     self.att_cfg, '_att_module_1')[1]
 
     def init_weights(self):
         """Initialize the weights of module."""
         for m in self.modules():
             if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
                 xavier_init(m, distribution='uniform')
-        # if self.fpn_stride == 8:
-        #     for m in self.modules():
-        #         if isinstance(m, CARAFEPack):
-        #             m.init_weights()
-        self.bbox_head.init_weights()
+        # for m in self.modules():
+        #     if isinstance(m, CARAFEPack):
+        #         m.init_weights()
 
     def init_assigner_sampler(self):
         """Initialize assigner and sampler."""
@@ -362,6 +217,7 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
         """
         # assign gts and sample proposals
         if self.with_bbox:
+
             num_imgs = len(img_metas)
             if gt_bboxes_ignore is None:
                 gt_bboxes_ignore = [None for _ in range(num_imgs)]
@@ -405,60 +261,24 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
         Returns:
             dict[str, Tensor]: a dictionary of bbox_results.
         """
-        if self.fpn_stride == 8:
-            #fpn_feat = self.upsample_module(x[0])
-            # fpn_feat = F.interpolate(x[0], y[1].shape[2:], **self.upsample_cfg)
-            # fpn_feat = torch.cat((fpn_feat, y[1]), dim=1)
-            # fpn_feat = self.down_conv2(fpn_feat)
-            # fpn_feat = fpn_feat + self.l_conv(y[1])
-            fpn_feat = self.fpn_conv_1(self.fpn_conv(y[1]))
-            # fpn_feat = self.att_module_1(fpn_feat)
-            # fpn_feat = fpn_feat + y[1]
-            #fpn_feat = self.fpn_conv(fpn_feat)
-        else:
-            fpn_feat = x[0]
-        #y = self.y_conv(y)
-
-        y = self.unshuffle(y[0])
-        y = self.fil_conv(self.fil_conv_1(y))
-        #y = self.maxpool(y)
-        cat_feats = torch.cat((fpn_feat, y), dim=1)
-        # cat_feats = torch.cat((x[0], y_s4), dim=1)
-        cat_feats = self.down_conv(cat_feats)
-        cat_feats = self.att_module(cat_feats)
-        cat_feats = cat_feats + fpn_feat
-
-        # y = self.y_conv(y)
-        #upsample_p2 = F.interpolate(x[0], y.shape[2:], **self.upsample_cfg)
-        #y_out = self.downsample(y_out)
+        y_out = self.y_conv(y)
         #prev_shape = laterals[i - 1].shape[2:]
-
-        #p2_feat = x[0]
-        # upsample_out = F.interpolate(
-        #     x[0], y_out.shape[2:], **self.upsample_cfg)
+        upsample_out = F.interpolate(
+            x[0], y_out.shape[2:], **self.upsample_cfg)
         # print(upsample_out.shape)
         # assert (1 == 2)
         # upsample_out = self.upsample_modules[0](x[0])
-        #upsample_p2 = self.upsample_module(x[0])
-        #cat2 = torch.cat((upsample_p2, y), dim=1)
-        #cat2 = self.fusion_conv(cat2)
-        # cat2 = self.y_conv2(cat2)
-        # cat2 = self.pw_conv(self.dw_conv(cat2))
-        #cat2 = self.att_module(cat2)
-        #cat2 = cat2 + x[0]
 
-        # cat_feats = torch.cat((p2_feat, y_out), dim=1)
-        # down_feats = self.down_conv(cat_feats)
-
-        #out_feats = self.fil_conv(self.fil_conv_1(down_feats))
-        # att_feats = self.att_module(down_feats)
-        # att_feats = p2_feat + att_feats
-
+        cat_feats = torch.cat((upsample_out, y_out), dim=1)
+        down_feats = self.down_conv(cat_feats)
+        # out_feats = self.fil_conv(self.fil_conv_1(down_feats))
+        #att_feats = self.att_module(down_feats)
+        #att_feats = upsample_out+att_feats
         # att_feats = self.att_module_1(att_feats)
-        #lowlevel_feat =  att_feats
+        lowlevel_feat = upsample_out+down_feats
 
         bbox_feats = self.bbox_roi_extractor(
-            x[:self.bbox_roi_extractor.num_inputs], cat_feats, rois)
+            x[:self.bbox_roi_extractor.num_inputs], lowlevel_feat, rois)
         # lowlevel_bbox_feats = self.lowlevel_bbox_roi_extractor(
         #     [lowlevel_feat], rois)
         #bbox_feats = torch.cat([bbox_feats, lowlevel_bbox_feats], dim=1)

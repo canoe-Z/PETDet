@@ -644,7 +644,7 @@ class LowlResNet(BaseModule):
             x = res_layer(x)
             if i in self.out_indices:
                 outs.append(x)
-        return tuple(outs), x1
+        return tuple(outs), [x1,outs[0]]
 
     def train(self, mode=True):
         """Convert the model into training mode while keep normalization layer

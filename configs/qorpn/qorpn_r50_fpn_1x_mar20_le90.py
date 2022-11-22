@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/datasets/fair1mv2.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/mar20.py', '../_base_/schedules/schedule_1x.py',
     '../_base_/default_runtime.py'
 ]
 
@@ -20,44 +20,34 @@ model = dict(
         type='FPN',
         in_channels=[256, 512, 1024, 2048],
         out_channels=256,
+        start_level=1,
+        add_extra_convs='on_input',
         num_outs=5),
     rpn_head=dict(
-        type='OrientedRPNHead',
+        type='QualityOrientedRPNHead',
         in_channels=256,
+        num_dcn=0,
+        stacked_convs=4,
         feat_channels=256,
-        version=angle_version,
-        anchor_generator=dict(
-            type='AnchorGenerator',
-            scales=[8],
-            ratios=[0.5, 1.0, 2.0],
-            strides=[4, 8, 16, 32, 64]),
+        strides=[8, 16, 32, 64, 128],
+        center_sampling=False,
+        center_sample_radius=1.5,
+        shrink_sampling=True,
+        shrink_sigma=[0, 0.15, 0.3, 0.45, 0.6],
+        scale_angle=True,
         bbox_coder=dict(
-            type='MidpointOffsetCoder',
-            angle_range=angle_version,
-            target_means=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            target_stds=[1.0, 1.0, 1.0, 1.0, 0.5, 0.5]),
-        loss_cls=dict(
-            type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0),
-        loss_bbox=dict(
-            type='SmoothL1Loss', beta=0.1111111111111111, loss_weight=1.0)),
+            type='DistanceAnglePointCoder', angle_version=angle_version),
+        use_vfl=True,
+        loss_cls_vfl=dict(
+            type='VarifocalLoss',
+            use_sigmoid=True,
+            alpha=0.75,
+            gamma=2.0,
+            iou_weighted=True,
+            loss_weight=0.5),
+        loss_bbox=dict(type='RotatedIoULoss', loss_weight=0.5)),
     train_cfg=dict(
-        rpn=dict(
-            assigner=dict(
-                type='MaxIoUAssigner',
-                pos_iou_thr=0.7,
-                neg_iou_thr=0.3,
-                min_pos_iou=0.3,
-                match_low_quality=True,
-                ignore_iof_thr=-1),
-            sampler=dict(
-                type='RandomSampler',
-                num=256,
-                pos_fraction=0.5,
-                neg_pos_ub=-1,
-                add_gt_as_proposals=False),
-            allowed_border=0,
-            pos_weight=-1,
-            debug=False),
+        rpn=dict(),
         rpn_proposal=dict(
             nms_pre=2000,
             max_per_img=2000,
@@ -86,12 +76,9 @@ train_pipeline = [
     dict(type='DefaultFormatBundle'),
     dict(type='Collect', keys=['img', 'gt_bboxes'])
 ]
-data_root = './data/split_ss_fair1m2_0/'
 data = dict(
     train=dict(pipeline=train_pipeline, version=angle_version),
     val=dict(version=angle_version),
-    test=dict(version=angle_version,
-              ann_file=data_root + 'val/annfiles/',
-              img_prefix=data_root + 'val/images/'))
+    test=dict(version=angle_version))
 
 optimizer = dict(lr=0.02)
