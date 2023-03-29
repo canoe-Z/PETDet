@@ -4,9 +4,10 @@ from .gaussian_dist_loss import GDLoss
 from .gaussian_dist_loss_v1 import GDLoss_v1
 from .kf_iou_loss import KFLoss
 from .kld_reppoints_loss import KLDRepPointsLoss
-from .rotated_iou_loss import RotatedIoULoss
+from .rotated_iou_loss import RotatedIoULoss, RotatedGIoULoss
 from .smooth_focal_loss import SmoothFocalLoss
 from .spatial_border_loss import SpatialBorderLoss
+from .poly_iou_loss import PolyIoULoss, PolyGIoULoss
 from .softmax_focal_loss import SoftmaxFocalLoss
 
 __all__ = [

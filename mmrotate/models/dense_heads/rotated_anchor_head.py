@@ -477,9 +477,6 @@ class RotatedAnchorHead(RotatedBaseDenseHead, BBoxTestMixin):
             dict[str, Tensor]: A dictionary of loss components.
         """
         featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
-        # for featmap in cls_scores:
-        #     print(featmap.size()[-2:])
-        # print(self.anchor_generator.num_levels)
         assert len(featmap_sizes) == self.anchor_generator.num_levels
 
         device = cls_scores[0].device

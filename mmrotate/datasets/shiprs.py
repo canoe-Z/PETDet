@@ -1,3 +1,4 @@
+import mmcv
 from mmcv import print_log
 
 from mmdet.datasets.coco import CocoDataset
@@ -5,6 +6,7 @@ from mmdet.datasets.api_wrappers import COCO, COCOeval
 import numpy as np
 from collections import OrderedDict
 
+from mmrotate.core.evaluation import eval_rbbox_recalls
 from mmrotate.core import eval_rbbox_map, obb2poly_np, poly2obb_np
 from .builder import ROTATED_DATASETS
 
@@ -105,7 +107,7 @@ class ShipRSImageNet(CocoDataset):
             results,
             metric='mAP',
             logger=None,
-            proposal_nums=(100, 300, 1000),
+            proposal_nums=(100, 300, 500, 1000, 2000),
             iou_thr=[0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95],
             scale_ranges=None,
             use_07_metric=True,
@@ -158,6 +160,24 @@ class ShipRSImageNet(CocoDataset):
             eval_results['mAP'] = sum(mean_aps) / len(mean_aps)
             eval_results.move_to_end('mAP', last=False)
         elif metric == 'recall':
+            assert mmcv.is_list_of(results, np.ndarray)
+            gt_bboxes = []
+            for i in range(len(self)):
+                ann = self.get_ann_info(i)
+                bboxes = ann['bboxes']
+                gt_bboxes.append(bboxes)
+            if isinstance(iou_thr, float):
+                iou_thr = [iou_thr]
+            recalls = eval_rbbox_recalls(
+                gt_bboxes, results, proposal_nums, iou_thr, logger=logger)
+            for i, num in enumerate(proposal_nums):
+                for j, iou in enumerate(iou_thr):
+                    eval_results[f'recall@{num}@{iou}'] = recalls[i, j]
+            if recalls.shape[1] > 1:
+                ar = recalls.mean(axis=1)
+                for i, num in enumerate(proposal_nums):
+                    eval_results[f'AR@{num}'] = ar[i]
+        else:
             raise NotImplementedError
 
         return eval_results
