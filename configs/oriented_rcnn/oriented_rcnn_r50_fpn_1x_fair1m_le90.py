@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/datasets/fair1mv2_trainval.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/fair1mv2.py', '../_base_/schedules/schedule_1x.py',
     '../_base_/default_runtime.py'
 ]
 
@@ -77,7 +77,8 @@ model = dict(
                 neg_iou_thr=0.3,
                 min_pos_iou=0.3,
                 match_low_quality=True,
-                ignore_iof_thr=-1),
+                ignore_iof_thr=-1,
+                gpu_assign_thr=500),
             sampler=dict(
                 type='RandomSampler',
                 num=256,
@@ -143,5 +144,4 @@ data = dict(
     val=dict(version=angle_version),
     test=dict(version=angle_version))
 
-#optimizer = dict(lr=0.005)
 optimizer = dict(lr=0.02)

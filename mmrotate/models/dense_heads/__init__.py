@@ -26,6 +26,7 @@ from .custom_rpn.rotated_atss_rpn_head import RotatedATSSRPNHead
 from .custom_rpn.rotated_fcos_rpn_head import RotatedFCOSRPNHead
 from .custom_rpn.rotated_vf_fcos_rpn_head import RotatedVFFCOSHead
 from .custom_rpn.rotated_fcos_carpn_head import RotatedFCOSCARPNHead
+from .quality_orpn_head_atss import QualityOrientedRPNHeadATSS
 from .quality_orpn_head import QualityOrientedRPNHead
 
 __all__ = [

@@ -1,11 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from mmrotate.core.bbox.transforms import hbb2obb
-
 from ..builder import BBOX_ASSIGNERS
 from ..iou_calculators.builder import build_iou_calculator
-from mmcv.ops import points_in_polygons
 from mmdet.core.bbox.assigners.assign_result import AssignResult
 from mmdet.core.bbox.assigners.base_assigner import BaseAssigner
 
@@ -89,10 +86,6 @@ class SASATSSAssigner(BaseAssigner):
 
         # compute iou between all bbox and gt
         assert gt_bboxes.size(1) == 5
-        # if bboxes.size(-1) == 4:
-        #     rbboxes = hbb2obb(bboxes)
-        #     overlaps = self.iou_calculator(rbboxes, gt_bboxes)
-        # elif bboxes.size(-1) == 5:
         overlaps = self.iou_calculator(bboxes, gt_bboxes)
 
         # assign 0 by default
@@ -119,11 +112,7 @@ class SASATSSAssigner(BaseAssigner):
         gt_cx, gt_cy = gt_bboxes[:, 0], gt_bboxes[:, 1]
         gt_points = torch.stack((gt_cx, gt_cy), dim=1)
 
-        # if bboxes.size(-1) == 5:
         bboxes_cx, bboxes_cy = bboxes[:, 0], bboxes[:, 1]
-        # elif bboxes.size(-1) == 4:
-        #     bboxes_cx = (bboxes[:, 0] + bboxes[:, 2]) / 2.0
-        #     bboxes_cy = (bboxes[:, 1] + bboxes[:, 3]) / 2.0
         bboxes_points = torch.stack((bboxes_cx, bboxes_cy), dim=1)
 
         distances = (bboxes_points[:, None, :] -
@@ -163,7 +152,7 @@ class SASATSSAssigner(BaseAssigner):
         overlaps_thr_per_gt = overlaps_mean_per_gt + overlaps_std_per_gt
 
         # new assign
-        iou_thr_weight = torch.exp((-1 / 4) * gt_bboxes_ratios_per_gt)
+        iou_thr_weight = torch.exp(0 * gt_bboxes_ratios_per_gt)
         overlaps_thr_per_gt = overlaps_thr_per_gt * iou_thr_weight
         is_pos = candidate_overlaps >= overlaps_thr_per_gt[None, :]
         # limit the positive sample's center in gt

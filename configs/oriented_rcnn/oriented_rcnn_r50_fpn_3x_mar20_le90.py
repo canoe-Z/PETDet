@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/datasets/fair1mv2_trainval.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/mar20.py', '../_base_/schedules/schedule_3x.py',
     '../_base_/default_runtime.py'
 ]
 
@@ -56,7 +56,7 @@ model = dict(
             in_channels=256,
             fc_out_channels=1024,
             roi_feat_size=7,
-            num_classes=37,
+            num_classes=20,
             bbox_coder=dict(
                 type='DeltaXYWHAOBBoxCoder',
                 angle_range=angle_version,
@@ -122,5 +122,26 @@ model = dict(
             nms=dict(iou_thr=0.1),
             max_per_img=2000)))
 
+img_norm_cfg = dict(
+    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
+train_pipeline = [
+    dict(type='LoadImageFromFile'),
+    dict(type='LoadAnnotations', with_bbox=True),
+    dict(type='RResize', img_scale=(1024, 1024)),
+    dict(
+        type='RRandomFlip',
+        flip_ratio=[0.25, 0.25, 0.25],
+        direction=['horizontal', 'vertical', 'diagonal'],
+        version=angle_version),
+    dict(type='Normalize', **img_norm_cfg),
+    dict(type='Pad', size_divisor=32),
+    dict(type='DefaultFormatBundle'),
+    dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels'])
+]
+data = dict(
+    train=dict(pipeline=train_pipeline, version=angle_version),
+    val=dict(version=angle_version),
+    test=dict(version=angle_version))
+
 optimizer = dict(lr=0.02)
-evaluation = dict(interval=12, metric='mAP')
+fp16 = dict(loss_scale='dynamic')

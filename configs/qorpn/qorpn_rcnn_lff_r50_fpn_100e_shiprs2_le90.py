@@ -1,4 +1,4 @@
-_base_ = ['./qorpn_rcnn_r50_fpn_1x_fair1m_le90.py']
+_base_ = ['./qorpn_rcnn_r50_fpn_100e_shiprs2_le90.py']
 
 model = dict(
     type='OrientedRCNNLFF',
@@ -15,7 +15,6 @@ model = dict(
         start_level=1),
     roi_head=dict(
         type='LFFDecoupleHeadRoIHead',
-        start_level=1,
         bbox_roi_extractor=dict(
             type='RotatedLFFRoIExtractor',
             roi_layer=dict(

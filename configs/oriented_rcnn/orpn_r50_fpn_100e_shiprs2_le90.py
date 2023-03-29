@@ -1,11 +1,11 @@
 _base_ = [
-    '../_base_/datasets/dotav1.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/shiprs2.py', '../_base_/schedules/schedule_100e.py',
     '../_base_/default_runtime.py'
 ]
 
 angle_version = 'le90'
 model = dict(
-    type='OrientedRCNN',
+    type='RotatedRPN',
     backbone=dict(
         type='ResNet',
         depth=50,
@@ -40,35 +40,6 @@ model = dict(
             type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0),
         loss_bbox=dict(
             type='SmoothL1Loss', beta=0.1111111111111111, loss_weight=1.0)),
-    roi_head=dict(
-        type='OrientedStandardRoIHead',
-        bbox_roi_extractor=dict(
-            type='RotatedSingleRoIExtractor',
-            roi_layer=dict(
-                type='RoIAlignRotated',
-                out_size=7,
-                sample_num=2,
-                clockwise=True),
-            out_channels=256,
-            featmap_strides=[4, 8, 16, 32]),
-        bbox_head=dict(
-            type='RotatedShared2FCBBoxHead',
-            in_channels=256,
-            fc_out_channels=1024,
-            roi_feat_size=7,
-            num_classes=15,
-            bbox_coder=dict(
-                type='DeltaXYWHAOBBoxCoder',
-                angle_range=angle_version,
-                norm_factor=None,
-                edge_swap=True,
-                proj_xy=True,
-                target_means=(.0, .0, .0, .0, .0),
-                target_stds=(0.1, 0.1, 0.2, 0.2, 0.1)),
-            reg_class_agnostic=True,
-            loss_cls=dict(
-                type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0),
-            loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0))),
     train_cfg=dict(
         rpn=dict(
             assigner=dict(
@@ -91,36 +62,13 @@ model = dict(
             nms_pre=2000,
             max_per_img=2000,
             nms=dict(type='nms', iou_threshold=0.8),
-            min_bbox_size=0),
-        rcnn=dict(
-            assigner=dict(
-                type='MaxIoUAssigner',
-                pos_iou_thr=0.5,
-                neg_iou_thr=0.5,
-                min_pos_iou=0.5,
-                match_low_quality=False,
-                iou_calculator=dict(type='RBboxOverlaps2D'),
-                ignore_iof_thr=-1),
-            sampler=dict(
-                type='RRandomSampler',
-                num=512,
-                pos_fraction=0.25,
-                neg_pos_ub=-1,
-                add_gt_as_proposals=True),
-            pos_weight=-1,
-            debug=False)),
+            min_bbox_size=0)),
     test_cfg=dict(
         rpn=dict(
             nms_pre=2000,
             max_per_img=2000,
             nms=dict(type='nms', iou_threshold=0.8),
-            min_bbox_size=0),
-        rcnn=dict(
-            nms_pre=2000,
-            min_bbox_size=0,
-            score_thr=0.05,
-            nms=dict(iou_thr=0.1),
-            max_per_img=2000)))
+            min_bbox_size=0)))
 
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
@@ -136,11 +84,11 @@ train_pipeline = [
     dict(type='Normalize', **img_norm_cfg),
     dict(type='Pad', size_divisor=32),
     dict(type='DefaultFormatBundle'),
-    dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels'])
+    dict(type='Collect', keys=['img', 'gt_bboxes'])
 ]
 data = dict(
     train=dict(pipeline=train_pipeline, version=angle_version),
     val=dict(version=angle_version),
     test=dict(version=angle_version))
-
+    
 optimizer = dict(lr=0.02)

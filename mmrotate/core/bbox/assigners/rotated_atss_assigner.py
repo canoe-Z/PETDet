@@ -96,11 +96,7 @@ class RotatedATSSAssigner(BaseAssigner):
         gt_cx, gt_cy = gt_bboxes[:, 0], gt_bboxes[:, 1]
         gt_points = torch.stack((gt_cx, gt_cy), dim=1)
 
-        #if bboxes.size(-1) == 5:
         bboxes_cx, bboxes_cy = bboxes[:, 0], bboxes[:, 1]
-        # elif bboxes.size(-1) == 4:
-        #     bboxes_cx = (bboxes[:, 0] + bboxes[:, 2]) / 2.0
-        #     bboxes_cy = (bboxes[:, 1] + bboxes[:, 3]) / 2.0
         bboxes_points = torch.stack((bboxes_cx, bboxes_cy), dim=1)
 
         distances = (bboxes_points[:, None, :] -

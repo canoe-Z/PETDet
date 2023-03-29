@@ -2,7 +2,6 @@ _base_ = [
     '../_base_/datasets/mar20.py', '../_base_/schedules/schedule_3x.py',
     '../_base_/default_runtime.py'
 ]
-
 angle_version = 'le90'
 model = dict(
     type='OrientedRCNN',
@@ -32,8 +31,8 @@ model = dict(
         strides=[8, 16, 32, 64, 128],
         center_sampling=False,
         center_sample_radius=1.5,
-        shrink_sampling=True,
-        shrink_sigma=[0, 0.15, 0.3, 0.45, 0.6],
+        shrink_sampling=False,
+        shrink_sigma=[0, 0.1, 0.2, 0.3, 0.4],
         scale_angle=True,
         bbox_coder=dict(
             type='DistanceAnglePointCoder', angle_version=angle_version),
@@ -44,8 +43,8 @@ model = dict(
             alpha=0.75,
             gamma=2.0,
             iou_weighted=True,
-            loss_weight=0.5),
-        loss_bbox=dict(type='RotatedIoULoss', loss_weight=0.5)),
+            loss_weight=0.25),
+        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(
@@ -133,12 +132,11 @@ data = dict(
     val=dict(version=angle_version),
     test=dict(version=angle_version))
 
+optimizer = dict(lr=0.02)
+
 lr_config = dict(
     policy='step',
     warmup='linear',
-    warmup_iters=2000,
-    warmup_ratio=0.0005,
+    warmup_iters=1000,
+    warmup_ratio=1.0 / 3,
     step=[24, 33])
-fp16 = dict(loss_scale='dynamic')
-
-optimizer = dict(lr=0.02)

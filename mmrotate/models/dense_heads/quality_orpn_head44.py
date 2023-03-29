@@ -10,9 +10,9 @@ from mmdet.models.dense_heads.tood_head import TaskDecomposition
 
 from mmrotate.core import obb2xyxy
 from mmrotate.core.bbox import rbbox_overlaps
-from mmdet.core.bbox import bbox_overlaps
 from ..builder import ROTATED_HEADS, build_loss
 from .oriented_anchor_free_head import OrientedAnchorFreeHead
+from icecream import ic
 
 INF = 1e8
 
@@ -62,9 +62,9 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                  in_channels,
                  num_dcn=0,
                  start_level=0,
+                 angle_version='le90',
                  regress_ranges=((-1, 64), (64, 128), (128, 256), (256, 512),
                                  (512, INF)),
-                 angle_version='le90',
                  center_sampling=False,
                  center_sample_radius=1.5,
                  shrink_sampling=False,
@@ -77,7 +77,6 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                      alpha=0.25,
                      loss_weight=0.5),
                  use_vfl=True,
-                 vfl_by_hbbox=False,
                  loss_cls_vfl=dict(
                      type='VarifocalLoss',
                      use_sigmoid=True,
@@ -162,7 +161,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
 
         normal_init(self.tood_cls, std=0.01, bias=bias_cls)
         normal_init(self.tood_reg, std=0.01)
-        constant_init(self.tood_angle, 0)
+        normal_init(self.tood_angle, std=0.01)
 
     def forward(self, feats):
         """Forward features from the upstream network.
@@ -245,7 +244,9 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
+        featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
         assert len(cls_scores) == len(bbox_preds)
+
         gt_labels = None
         featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
         all_level_points = self.prior_generator.grid_priors(
@@ -254,78 +255,166 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
             device=bbox_preds[0].device)
         labels, bbox_targets = self.get_targets(all_level_points, gt_bboxes,
                                                 gt_labels)
+        # device = cls_scores[0].device
+        # anchor_list, valid_flag_list = self.get_anchors(
+        #     featmap_sizes, img_metas, device=device)
+        # label_channels = self.cls_out_channels if self.use_sigmoid_cls else 1
 
+        # all_level_points = self.prior_generator.grid_priors(
+        #     featmap_sizes,
+        #     dtype=bbox_preds[0].dtype,
+        #     device=bbox_preds[0].device)
+
+        # num_imgs = cls_scores[0].size(0)
+        # # flatten cls_scores, bbox_preds and centerness
+        # flatten_cls_scores = [
+        #     cls_score.permute(0, 2, 3, 1).reshape(-1, self.cls_out_channels)
+        #     for cls_score in cls_scores
+        # ]
+        # flatten_bbox_preds = [
+        #     bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
+        #     for bbox_pred in bbox_preds
+        # ]
+
+        # cls_reg_targets = self.get_targets(
+        #     flatten_cls_scores,
+        #     flatten_bbox_preds,
+        #     anchor_list,
+        #     valid_flag_list,
+        #     gt_bboxes,
+        #     img_metas,
+        #     gt_bboxes_ignore_list=gt_bboxes_ignore,
+        #     gt_labels_list=None,
+        #     label_channels=label_channels)
+
+        # (anchor_list, labels_list, label_weights_list, bbox_targets_list,
+        #  alignment_metrics_list) = cls_reg_targets
+
+        # print(len(all_level_points))
+        # print(len(cls_scores))
+        # print(len(bbox_preds))
+        # print(len(labels))
+        # print(len(bbox_targets))
+        # print(len(self.prior_generator.strides))
         num_imgs = cls_scores[0].size(0)
-        # flatten cls_scores, bbox_preds and centerness
-        flatten_cls_scores = [
-            cls_score.permute(0, 2, 3, 1).reshape(-1, self.cls_out_channels)
-            for cls_score in cls_scores
-        ]
-        flatten_bbox_preds = [
-            bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
-            for bbox_pred in bbox_preds
-        ]
-        flatten_cls_scores = torch.cat(flatten_cls_scores)
-        flatten_bbox_preds = torch.cat(flatten_bbox_preds)
-        flatten_labels = torch.cat(labels)
-        flatten_bbox_targets = torch.cat(bbox_targets)
-        # repeat points to align with bbox_preds
-        flatten_points = torch.cat(
-            [points.repeat(num_imgs, 1) for points in all_level_points])
+        flatten_points = [points.repeat(num_imgs, 1)
+                          for points in all_level_points]
 
-        # FG cat_id: [0, num_classes -1], BG cat_id: num_classes
+        flatten_labels = torch.cat(labels)
         bg_class_ind = self.num_classes
         pos_inds = ((flatten_labels >= 0)
                     & (flatten_labels < bg_class_ind)).nonzero().reshape(-1)
-        num_pos = torch.tensor(
+        num_total_pos = torch.tensor(
             len(pos_inds), dtype=torch.float, device=bbox_preds[0].device)
-        num_pos = max(reduce_mean(num_pos), 1.0)
+        num_total_samples = reduce_mean(
+            torch.tensor(num_total_pos, dtype=torch.float,
+                         device=bbox_preds[0].device)).item()
+        num_total_samples = max(num_total_samples, 1.0)
 
-        pos_bbox_preds = flatten_bbox_preds[pos_inds]
-        pos_bbox_targets = flatten_bbox_targets[pos_inds]
-        pos_centerness_targets = self.centerness_target(pos_bbox_targets)
-        # centerness weighted iou loss
-        centerness_denorm = max(
-            reduce_mean(pos_centerness_targets.sum().detach()), 1e-6)
+        losses_cls, losses_bbox, bbox_avg_factor = multi_apply(
+            self.loss_single,
+            flatten_points,
+            cls_scores,
+            bbox_preds,
+            labels,
+            bbox_targets
+        )
 
+        # cls_avg_factor = reduce_mean(sum(cls_avg_factors)).clamp_(min=1).item()
+        # losses_cls = list(map(lambda x: x / cls_avg_factor, losses_cls))
+
+        # bbox_avg_factor = reduce_mean(
+        #     sum(bbox_avg_factors)).clamp_(min=1).item()
+        # losses_bbox = list(map(lambda x: x / bbox_avg_factor, losses_bbox))
+        bbox_avg_factor = sum(bbox_avg_factor)
+        bbox_avg_factor = reduce_mean(bbox_avg_factor).clamp_(min=1).item()
+        losses_bbox = list(map(lambda x: x / bbox_avg_factor, losses_bbox))
+        losses_cls = list(map(lambda x: x / num_total_samples, losses_cls))
+        return dict(
+            loss_rpn_cls=losses_cls,
+            loss_rpn_bbox=losses_bbox)
+
+    def loss_single(self, points, cls_score, bbox_pred, labels,
+                    bbox_targets):
+        """Compute loss of a single scale level.
+
+        Args:
+            anchors (Tensor): Box reference for each scale level with shape
+                (N, num_total_anchors, 4).
+            cls_score (Tensor): Box scores for each scale level
+                Has shape (N, num_anchors * num_classes, H, W).
+            bbox_pred (Tensor): Decoded bboxes for each scale
+                level with shape (N, num_anchors * 4, H, W).
+            labels (Tensor): Labels of each anchors with shape
+                (N, num_total_anchors).
+            label_weights (Tensor): Label weights of each anchor with shape
+                (N, num_total_anchors).
+            bbox_targets (Tensor): BBox regression targets of each anchor with
+                shape (N, num_total_anchors, 4).
+            alignment_metrics (Tensor): Alignment metrics with shape
+                (N, num_total_anchors).
+            stride (tuple[int]): Downsample stride of the feature map.
+
+        Returns:
+            dict[str, Tensor]: A dictionary of loss components.
+        """
+        #assert stride[0] == stride[1], 'h stride is not equal to w stride!'
+        cls_score = cls_score.permute(0, 2, 3, 1).reshape(
+            -1, self.cls_out_channels).contiguous()
+        bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
+        bbox_targets = bbox_targets.reshape(-1, 5)
+        labels = labels.reshape(-1)
+
+        # FG cat_id: [0, num_classes -1], BG cat_id: num_classes
+        bg_class_ind = self.num_classes
+        pos_inds = ((labels >= 0)
+                    & (labels < bg_class_ind)).nonzero().squeeze(1)
+
+        ic(points.shape)
+        ic(points[0])
         if len(pos_inds) > 0:
-            pos_points = flatten_points[pos_inds]
-            pos_decoded_bbox_preds = self.bbox_coder.decode(pos_points,
-                                                            pos_bbox_preds)
-            pos_decoded_target_preds = self.bbox_coder.decode(
-                pos_points, pos_bbox_targets)
+            pos_bbox_targets = bbox_targets[pos_inds]
+            pos_bbox_pred = bbox_pred[pos_inds]
+            pos_anchors = points[pos_inds]
+
+            pos_decode_bbox_pred = self.bbox_coder.decode(pos_anchors,
+                                                          pos_bbox_pred)
+            pos_decode_bbox_targets = self.bbox_coder.decode(
+                pos_anchors, pos_bbox_targets)
+
+            # regression loss
+            centerness_targets = self.centerness_target(pos_bbox_targets)
             loss_bbox = self.loss_bbox(
-                pos_decoded_bbox_preds,
-                pos_decoded_target_preds,
-                weight=pos_centerness_targets,
-                avg_factor=centerness_denorm)
+                pos_decode_bbox_pred,
+                pos_decode_bbox_targets,
+                weight=centerness_targets,
+                avg_factor=1.0)
 
             # build IoU-aware cls_score targets
             if self.use_vfl:
                 iou_targets_ini = rbbox_overlaps(
-                    pos_decoded_bbox_preds.detach(),
-                    pos_decoded_target_preds.detach(),
+                    pos_decode_bbox_pred.detach(),
+                    pos_decode_bbox_targets.detach(),
                     is_aligned=True).clamp(min=1e-6).view(-1)
 
-                pos_labels = flatten_labels[pos_inds]
+                pos_labels = labels[pos_inds]
                 pos_ious = iou_targets_ini.clone().detach()
-                cls_iou_targets = torch.zeros_like(flatten_cls_scores)
+                cls_iou_targets = torch.zeros_like(cls_score)
                 cls_iou_targets[pos_inds, pos_labels] = pos_ious
         else:
-            loss_bbox = pos_bbox_preds.sum()
+            loss_bbox = bbox_pred.sum() * 0
             if self.use_vfl:
-                cls_iou_targets = torch.zeros_like(flatten_cls_scores)
+                cls_iou_targets = torch.zeros_like(cls_score)
+            centerness_targets = bbox_targets.new_tensor(0.)
 
         if self.use_vfl:
             loss_cls = self.loss_cls(
-                flatten_cls_scores, cls_iou_targets, avg_factor=num_pos)
+                cls_score, cls_iou_targets, avg_factor=1.0)
         else:
             loss_cls = self.loss_cls(
-                flatten_cls_scores, flatten_labels, avg_factor=num_pos)
+                cls_score, labels, avg_factor=1.0)
 
-        return dict(
-            loss_rpn_cls=loss_cls,
-            loss_rpn_bbox=loss_bbox)
+        return loss_cls, loss_bbox, centerness_targets.sum()
 
     def get_targets(self, points, gt_bboxes_list, gt_labels_list):
         """Compute regression, classification and centerness targets for points
@@ -484,26 +573,6 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
 
         return labels, bbox_targets
 
-    def centerness_target(self, pos_bbox_targets):
-        """Compute centerness targets.
-
-        Args:
-            pos_bbox_targets (Tensor): BBox targets of positive bboxes in shape
-                (num_pos, 4)
-        Returns:
-            Tensor: Centerness target.
-        """
-        # only calculate pos centerness targets, otherwise there may be nan
-        left_right = pos_bbox_targets[:, [0, 2]]
-        top_bottom = pos_bbox_targets[:, [1, 3]]
-        if len(left_right) == 0:
-            centerness_targets = left_right[..., 0]
-        else:
-            centerness_targets = (
-                left_right.min(dim=-1)[0] / left_right.max(dim=-1)[0]) * (
-                    top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
-        return torch.sqrt(centerness_targets)
-
     def _get_bboxes_single(self,
                            cls_score_list,
                            bbox_pred_list,
@@ -639,3 +708,54 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
             return dets[:cfg.max_per_img]
         else:
             return proposals.new_zeros(0, 5)
+
+    def get_anchors(self, featmap_sizes, img_metas, device='cuda'):
+        """Get anchors according to feature map sizes.
+
+        Args:
+            featmap_sizes (list[tuple]): Multi-level feature map sizes.
+            img_metas (list[dict]): Image meta info.
+            device (torch.device | str): Device for returned tensors
+
+        Returns:
+            tuple (list[Tensor]):
+
+                - anchor_list (list[Tensor]): Anchors of each image.
+                - valid_flag_list (list[Tensor]): Valid flags of each image.
+        """
+        num_imgs = len(img_metas)
+
+        # since feature map sizes of all images are the same, we only compute
+        # anchors for one time
+        multi_level_anchors = self.anchor_generator.grid_priors(
+            featmap_sizes, device)
+        anchor_list = [multi_level_anchors for _ in range(num_imgs)]
+
+        # for each image, we compute valid flags of multi level anchors
+        valid_flag_list = []
+        for img_id, img_meta in enumerate(img_metas):
+            multi_level_flags = self.anchor_generator.valid_flags(
+                featmap_sizes, img_meta['pad_shape'], device)
+            valid_flag_list.append(multi_level_flags)
+
+        return anchor_list, valid_flag_list
+
+    def centerness_target(self, pos_bbox_targets):
+        """Compute centerness targets.
+
+        Args:
+            pos_bbox_targets (Tensor): BBox targets of positive bboxes in shape
+                (num_pos, 4)
+        Returns:
+            Tensor: Centerness target.
+        """
+        # only calculate pos centerness targets, otherwise there may be nan
+        left_right = pos_bbox_targets[:, [0, 2]]
+        top_bottom = pos_bbox_targets[:, [1, 3]]
+        if len(left_right) == 0:
+            centerness_targets = left_right[..., 0]
+        else:
+            centerness_targets = (
+                left_right.min(dim=-1)[0] / left_right.max(dim=-1)[0]) * (
+                    top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
+        return torch.sqrt(centerness_targets)

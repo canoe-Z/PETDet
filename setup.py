@@ -5,6 +5,33 @@ import sys
 import warnings
 from setuptools import find_packages, setup
 
+import torch
+from torch.utils.cpp_extension import (BuildExtension, CppExtension,
+                                       CUDAExtension)
+
+def make_cuda_ext(name, module, sources, sources_cuda=[]):
+
+    define_macros = []
+    extra_compile_args = {'cxx': []}
+
+    if torch.cuda.is_available() or os.getenv('FORCE_CUDA', '0') == '1':
+        define_macros += [('WITH_CUDA', None)]
+        extension = CUDAExtension
+        extra_compile_args['nvcc'] = [
+            '-D__CUDA_NO_HALF_OPERATORS__',
+            '-D__CUDA_NO_HALF_CONVERSIONS__',
+            '-D__CUDA_NO_HALF2_OPERATORS__',
+        ]
+        sources += sources_cuda
+    else:
+        print(f'Compiling {name} without CUDA')
+        extension = CppExtension
+
+    return extension(
+        name=f'{module}.{name}',
+        sources=[os.path.join(*module.split('.'), p) for p in sources],
+        define_macros=define_macros,
+        extra_compile_args=extra_compile_args)
 
 def readme():
     """Load README.md."""
@@ -192,4 +219,15 @@ if __name__ == '__main__':
             'optional': parse_requirements('requirements/optional.txt'),
             'mim': parse_requirements('requirements/mminstall.txt'),
         },
+        ext_modules=[
+            make_cuda_ext(
+                name='convex_ext',
+                module='mmrotate.ops.convex',
+                sources=[
+                    'src/convex_cpu.cpp',
+                    'src/convex_ext.cpp'
+                ],
+                sources_cuda=['src/convex_cuda.cu'])
+        ],
+        cmdclass={'build_ext': BuildExtension},
         zip_safe=False)

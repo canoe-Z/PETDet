@@ -11,31 +11,6 @@ from mmcv.runner import BaseModule
 from mmcv.cnn import xavier_init,constant_init
 
 
-class BilinearPooling(BaseModule):
-    def __init__(self, in_channels, num_class):
-        super().__init__()
-        self.fc = nn.Linear(in_channels, num_class)
-
-    def init_weights(self):
-        xavier_init(self.fc,0,0)
-
-    def forward(self, x):
-        batch_size = x.size(0)
-        channel_size = x.size(1)
-        feature_size = x.size(2) * x.size(3)
-        x = x.view(batch_size, channel_size, feature_size)
-        x = torch.bmm(x, torch.transpose(x, 1, 2)) / feature_size
-
-        x = x.view(batch_size, -1)
-        x = torch.sqrt(x + 1e-5)
-
-        x = torch.nn.functional.normalize(x)
-
-        x = self.fc(x)
-
-        return x
-
-
 @ROTATED_HEADS.register_module()
 class ExperimentBBoxHead(RotatedConvFCBBoxHead):
     def __init__(self,
@@ -96,8 +71,6 @@ class ExperimentBBoxHead(RotatedConvFCBBoxHead):
                        in_channels=256, ratio=1. / 4)
         self.cls_att = build_plugin_layer(att_cfg, '_att_module')[1]
         self.reg_att = build_plugin_layer(att_cfg, '_att_module_1')[1]
-        self.bilinear_pooling = BilinearPooling(
-            in_channels=65536, num_class=cls_channels)
 
     def forward(self, x):
         # extract task interactive features
@@ -136,8 +109,6 @@ class ExperimentBBoxHead(RotatedConvFCBBoxHead):
             cls_score = self.v(x_cls) if self.with_cls else None
         elif self.use_ra:
             cls_score = self.ra(x_cls) if self.with_cls else None
-        elif self.use_bilinear_pooling:
-            cls_score = self.bilinear_pooling(x_cls) if self.with_cls else None
         else:
             for conv in self.cls_convs:
                 x_cls = conv(x_cls)
