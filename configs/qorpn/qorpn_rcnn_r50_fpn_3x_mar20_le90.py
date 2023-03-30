@@ -26,7 +26,7 @@ model = dict(
     rpn_head=dict(
         type='QualityOrientedRPNHead',
         in_channels=256,
-        num_dcn=2,
+        num_dcn=0,
         stacked_convs=4,
         feat_channels=256,
         strides=[8, 16, 32, 64, 128],
@@ -45,7 +45,8 @@ model = dict(
             gamma=2.0,
             iou_weighted=True,
             loss_weight=0.25),
-        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5)),
+        loss_bbox=dict(type='RotatedIoULoss', mode='linear', loss_weight=0.5),
+        loss_bbox_refine=dict(type='RotatedIoULoss', mode='linear', loss_weight=0.5)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(
@@ -77,11 +78,11 @@ model = dict(
             loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0))),
     train_cfg=dict(
         rpn=dict(
-            assigner=dict(type='RotatedATSSAssigner', topk=9),
-            allowed_border=-1,
-            pos_weight=-1,
-            iou_calculator=dict(type='RBboxOverlaps2D'),
-            debug=False
+            # assigner=dict(type='RotatedATSSAssigner', topk=9),
+            # allowed_border=-1,
+            # pos_weight=-1,
+            # iou_calculator=dict(type='RBboxOverlaps2D'),
+            # debug=False
         ),
         rpn_proposal=dict(
             nms_pre=2000,

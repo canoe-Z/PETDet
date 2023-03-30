@@ -10,9 +10,10 @@ from mmdet.models.dense_heads.tood_head import TaskDecomposition
 
 from mmrotate.core import obb2xyxy
 from mmrotate.core.bbox import rbbox_overlaps
+from mmdet.core.bbox import bbox_overlaps
 from ..builder import ROTATED_HEADS, build_loss
 from .oriented_anchor_free_head import OrientedAnchorFreeHead
-from ..detectors.utils import AlignConv
+
 INF = 1e8
 
 
@@ -76,6 +77,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                      alpha=0.25,
                      loss_weight=0.5),
                  use_vfl=True,
+                 vfl_by_hbbox=False,
                  loss_cls_vfl=dict(
                      type='VarifocalLoss',
                      use_sigmoid=True,
@@ -110,6 +112,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
 
     def _init_layers(self):
         """Initialize layers of the head."""
+        #self.relu = nn.ReLU(inplace=True)
         self.inter_convs = nn.ModuleList()
         for i in range(self.stacked_convs):
             if i < self.num_dcn:
@@ -148,19 +151,6 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         if self.scale_angle:
             self.scale_angle = Scale(1.0)
 
-        # refine
-        self.idxs = range(len(self.strides))
-        self.acs = nn.ModuleList([
-            AlignConv(
-                self.in_channels,
-                self.in_channels,
-                kernel_size=3,
-                stride=s) for s in self.strides
-        ])
-        self.tood_refine_reg = nn.Conv2d(
-            self.feat_channels, self.num_base_priors * 4, 3, padding=1)
-        self.tood_refine_angle = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
-
     def init_weights(self):
         """Initialize weights of the head."""
         bias_cls = bias_init_with_prob(0.09)
@@ -190,10 +180,10 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                 centernesses (list[Tensor]): centerness for each scale level, \
                     each is a 4D-tensor, the channel number is num_points * 1.
         """
-        return multi_apply(self.forward_single, feats[self.start_level:], self.scales, self.acs, self.idxs,
+        return multi_apply(self.forward_single, feats[self.start_level:], self.scales,
                            self.strides)
 
-    def forward_single(self, x, scale, ac, idx, stride):
+    def forward_single(self, x, scale, stride):
         """Forward features of a single scale level.
 
         Args:
@@ -225,21 +215,6 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         if self.scale_angle:
             angle_pred = self.scale_angle(angle_pred).float()
         bbox_pred = torch.cat([bbox_pred, angle_pred], dim=1)
-
-        # refine
-        b, _, h, w = x.shape
-        point = self.prior_generator.single_level_grid_priors(
-            (h, w), idx, device=x.device)
-        point = torch.cat([point for _ in range(b)])
-        bbox_pred_decoded = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
-        bbox_pred_decoded = self.bbox_coder.decode(point, bbox_pred)
-        ac_feat = ac(reg_feat, bbox_pred_decoded)
-        bbox_pred_delta = scale(self.tood_refine_reg(ac_feat).exp()).float()
-        angle_pred_delta = self.tood_refine_angle(ac_feat)
-        if self.scale_angle:
-            angle_pred_delta = self.scale_angle(angle_pred_delta).float()
-        bbox_pred_rf = torch.cat([bbox_pred_delta, angle_pred_delta], dim=1)
-        bbox_pred = bbox_pred+bbox_pred_rf
 
         return cls_score, bbox_pred
 
