@@ -3,9 +3,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from mmdet.core import images_to_levels, multi_apply, unmap
-from mmrotate.core import obb2hbb, rotated_anchor_inside_flags, build_prior_generator, build_assigner, build_sampler
+from mmrotate.core import rotated_anchor_inside_flags, build_prior_generator, build_assigner, build_sampler
 from .utils import get_num_level_anchors_inside
-from mmcv.cnn import ConvModule, Scale, bias_init_with_prob, normal_init, constant_init
+from mmdet.core.utils import select_single_mlvl
+from mmcv.cnn import ConvModule, Scale, bias_init_with_prob, normal_init
 from mmcv.ops import batched_nms
 from mmcv.runner import force_fp32
 from mmdet.core import multi_apply, reduce_mean
@@ -13,10 +14,9 @@ from mmdet.models.dense_heads.tood_head import TaskDecomposition
 
 from mmrotate.core import obb2xyxy
 from mmrotate.core.bbox import rbbox_overlaps
-from mmdet.core import bbox_overlaps
 from ..builder import ROTATED_HEADS, build_loss
 from .oriented_anchor_free_head import OrientedAnchorFreeHead
-from icecream import ic
+from ..detectors.utils import AlignConv
 
 INF = 1e8
 
@@ -73,7 +73,7 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                      octave_base_scale=8,
                      scales_per_octave=1,
                      strides=[8, 16, 32, 64, 128]),
-                 scale_angle=True,
+                 scale_angle=False,
                  loss_cls=dict(
                      type='FocalLoss',
                      use_sigmoid=True,
@@ -81,7 +81,6 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                      alpha=0.25,
                      loss_weight=0.5),
                  use_vfl=True,
-                 vfl_by_hbbox=False,
                  loss_cls_vfl=dict(
                      type='VarifocalLoss',
                      use_sigmoid=True,
@@ -89,13 +88,16 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                      gamma=2.0,
                      iou_weighted=True,
                      loss_weight=0.5),
+                 refine_bbox=True,
                  loss_bbox=dict(type='RotatedIoULoss', loss_weight=0.5),
+                 loss_bbox_refine=dict(type='RotatedIoULoss', loss_weight=0.5),
                  norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
                  **kwargs):
         self.num_dcn = num_dcn
         self.start_level = start_level
         self.scale_angle = scale_angle
         self.angle_version = angle_version
+        self.refine_bbox = refine_bbox
 
         super(QualityOrientedRPNHeadATSS, self).__init__(
             num_classes=1,
@@ -111,18 +113,19 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
         # except SSD detectors
         self.num_anchors = self.prior_generator.num_base_anchors[0]
         assert self.num_anchors == 1
-        self.assigner = build_assigner(self.train_cfg.assigner)
-        sampler_cfg = dict(type='PseudoSampler')
-        self.sampler = build_sampler(sampler_cfg, context=self)
+        if self.train_cfg:
+            self.assigner = build_assigner(self.train_cfg.assigner)
+            sampler_cfg = dict(type='PseudoSampler')
+            self.sampler = build_sampler(sampler_cfg, context=self)
 
         self.use_vfl = use_vfl
-        self.vfl_by_hbbox = vfl_by_hbbox
         if self.use_vfl:
             self.loss_cls = build_loss(loss_cls_vfl)
+        if self.refine_bbox:
+            self.loss_bbox_refine = build_loss(loss_bbox_refine)
 
     def _init_layers(self):
         """Initialize layers of the head."""
-        #self.relu = nn.ReLU(inplace=True)
         self.inter_convs = nn.ModuleList()
         for i in range(self.stacked_convs):
             if i < self.num_dcn:
@@ -161,6 +164,28 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
         if self.scale_angle:
             self.scale_angle = Scale(1.0)
 
+        # refine
+        self.idxs = range(len(self.strides))
+        if self.refine_bbox:
+            self.acs = nn.ModuleList([
+                AlignConv(
+                    self.in_channels,
+                    self.in_channels,
+                    kernel_size=3,
+                    stride=s) for s in self.strides
+            ])
+            self.tood_refine_reg = nn.Conv2d(
+                self.feat_channels, self.num_base_priors * 4, 3, padding=1)
+            self.tood_refine_angle = nn.Conv2d(
+                self.feat_channels, 1, 3, padding=1)
+            self.refine_scales = nn.ModuleList(
+                [Scale(1.0) for _ in self.strides])
+            if self.scale_angle:
+                self.refine_scale_angle = Scale(1.0)
+        else:
+            self.acs = [None for _ in self.strides]
+            self.refine_scales = [None for _ in self.strides]
+
     def init_weights(self):
         """Initialize weights of the head."""
         bias_cls = bias_init_with_prob(0.09)
@@ -172,7 +197,11 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
 
         normal_init(self.tood_cls, std=0.01, bias=bias_cls)
         normal_init(self.tood_reg, std=0.01)
-        constant_init(self.tood_angle, 0)
+        normal_init(self.tood_angle, std=0.01)
+
+        if self.refine_bbox:
+            normal_init(self.tood_refine_reg, std=0.01)
+            normal_init(self.tood_refine_angle, std=0.01)
 
     def forward(self, feats):
         """Forward features from the upstream network.
@@ -190,10 +219,10 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                 centernesses (list[Tensor]): centerness for each scale level, \
                     each is a 4D-tensor, the channel number is num_points * 1.
         """
-        return multi_apply(self.forward_single, feats[self.start_level:], self.scales,
+        return multi_apply(self.forward_single, feats[self.start_level:], self.scales, self.acs, self.refine_scales, self.idxs,
                            self.strides)
 
-    def forward_single(self, x, scale, stride):
+    def forward_single(self, x, scale, ac, refine_scale, idx, stride):
         """Forward features of a single scale level.
 
         Args:
@@ -220,18 +249,41 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
 
         # prediction
         cls_score = self.tood_cls(cls_feat)
-        bbox_pred = scale(self.tood_reg(reg_feat).exp()).float()
+        bbox_pred = scale(self.tood_reg(reg_feat).exp()).float() * stride
         angle_pred = self.tood_angle(reg_feat)
         if self.scale_angle:
             angle_pred = self.scale_angle(angle_pred).float()
         bbox_pred = torch.cat([bbox_pred, angle_pred], dim=1)
 
-        return cls_score, bbox_pred
+        # refine
+        if self.refine_bbox:
+            b, _, h, w = x.shape
+            anchor = self.prior_generator.single_level_grid_priors(
+                (h, w), idx, device=x.device)
+            point = self.get_anchor_points(anchor)
+            point = torch.cat([point for _ in range(b)])
+            reg_dist = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
+            bbox_pred_decoded = self.bbox_coder.decode(point, reg_dist)
+            ac_feat = ac(reg_feat, bbox_pred_decoded)
+            bbox_pred_delta = refine_scale(
+                self.tood_refine_reg(ac_feat).exp()).float() * stride
+            angle_pred_delta = self.tood_refine_angle(ac_feat)
+            if self.scale_angle:
+                angle_pred_delta = self.refine_scale_angle(
+                    angle_pred_delta).float()
+            bbox_pred_delta = torch.cat(
+                [bbox_pred_delta, angle_pred_delta], dim=1)
+            bbox_pred_refine = bbox_pred.detach() + bbox_pred_delta
 
-    @force_fp32(apply_to=('cls_scores', 'bbox_preds'))
+            return cls_score, bbox_pred, bbox_pred_refine
+        else:
+            return cls_score, bbox_pred, bbox_pred
+
+    @ force_fp32(apply_to=('cls_scores', 'bbox_preds', 'bbox_preds_refine'))
     def loss(self,
              cls_scores,
              bbox_preds,
+             bbox_preds_refine,
              gt_bboxes,
              img_metas,
              gt_bboxes_ignore=None):
@@ -286,24 +338,33 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
         all_anchor_list = images_to_levels(concat_anchor_list,
                                            num_level_anchors)
 
-        losses_cls, losses_bbox, bbox_avg_factor = multi_apply(
+        losses_cls, losses_bbox, losses_bbox_refine, bbox_avg_factor = multi_apply(
             self.loss_single,
             cls_scores,
             bbox_preds,
+            bbox_preds_refine,
             all_anchor_list,
             labels_list,
             bbox_targets_list,
             num_total_samples=num_total_samples)
+
         bbox_avg_factor = sum(bbox_avg_factor)
         bbox_avg_factor = reduce_mean(bbox_avg_factor).clamp_(min=1).item()
         losses_bbox = list(map(lambda x: x / bbox_avg_factor, losses_bbox))
-        # ic(losses_bbox)
+        if self.refine_bbox:
+            losses_bbox_refine = list(
+                map(lambda x: x / bbox_avg_factor, losses_bbox_refine))
 
-        return dict(
-            loss_rpn_cls=losses_cls,
-            loss_rpn_bbox=losses_bbox)
+            return dict(
+                loss_rpn_cls=losses_cls,
+                loss_rpn_bbox=losses_bbox,
+                loss_rpn_bbox_refine=losses_bbox_refine)
+        else:
+            return dict(
+                loss_rpn_cls=losses_cls,
+                loss_rpn_bbox=losses_bbox)
 
-    def loss_single(self, cls_score, bbox_pred, anchors, labels,
+    def loss_single(self, cls_score, bbox_pred, bbox_pred_refine, anchors, labels,
                     bbox_targets, num_total_samples):
         """Compute loss of a single scale level.
 
@@ -331,6 +392,7 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
             -1, self.cls_out_channels).contiguous()
         anchors = anchors.reshape(-1, anchors.size(-1))
         bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
+        bbox_pred_refine = bbox_pred_refine.permute(0, 2, 3, 1).reshape(-1, 5)
         bbox_targets = bbox_targets.reshape(-1, 5)
         labels = labels.reshape(-1)
 
@@ -339,43 +401,40 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
         pos_inds = ((labels >= 0)
                     & (labels < bg_class_ind)).nonzero().squeeze(1)
 
-        # ic(anchors.shape)
-        # ic(anchors[0])
-        # ic(anchors[1])
         if len(pos_inds) > 0:
             pos_bbox_targets = bbox_targets[pos_inds]
             pos_bbox_pred = bbox_pred[pos_inds]
+            pos_bbox_pred_refine = bbox_pred_refine[pos_inds]
             pos_prior_points = self.get_anchor_points(anchors[pos_inds])
             pos_decode_bbox_pred = self.bbox_coder.decode(pos_prior_points,
                                                           pos_bbox_pred)
+            pos_decode_bbox_pred_refine = self.bbox_coder.decode(pos_prior_points,
+                                                                 pos_bbox_pred_refine)
             pos_decode_bbox_targets = self.bbox_coder.decode(
                 pos_prior_points, pos_bbox_targets)
 
             # regression loss
             centerness_targets = self.centerness_target(pos_bbox_targets)
 
-            # ic(pos_decode_bbox_pred[0])
-            # ic(pos_decode_bbox_targets[0])
             loss_bbox = self.loss_bbox(
                 pos_decode_bbox_pred,
                 pos_decode_bbox_targets,
                 weight=centerness_targets,
                 avg_factor=1.0)
 
+            if self.refine_bbox:
+                loss_bbox_refine = self.loss_bbox_refine(
+                    pos_decode_bbox_pred_refine,
+                    pos_decode_bbox_targets,
+                    weight=centerness_targets,
+                    avg_factor=1.0)
+            else:
+                loss_bbox_refine = bbox_pred.sum() * 0
+
             # build IoU-aware cls_score targets
             if self.use_vfl:
-                # if self.vfl_by_hbbox:
-                #     pos_decode_bbox_pred_hbbox = obb2xyxy(
-                #         pos_decode_bbox_pred, self.angle_version)
-                #     pos_decode_bbox_targets_hbbox = obb2xyxy(
-                #         pos_decode_bbox_targets, self.angle_version)
-                #     iou_targets_ini = bbox_overlaps(
-                #         pos_decode_bbox_pred_hbbox.detach(),
-                #         pos_decode_bbox_targets_hbbox.detach(),
-                #         is_aligned=True).clamp(min=1e-6).view(-1)
-                # else:
                 iou_targets_ini = rbbox_overlaps(
-                    pos_decode_bbox_pred.detach(),
+                    pos_decode_bbox_pred_refine.detach(),
                     pos_decode_bbox_targets.detach(),
                     is_aligned=True).clamp(min=1e-6).view(-1)
 
@@ -385,6 +444,7 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                 cls_iou_targets[pos_inds, pos_labels] = pos_ious
         else:
             loss_bbox = bbox_pred.sum() * 0
+            loss_bbox_refine = bbox_pred_refine.sum() * 0
             if self.use_vfl:
                 cls_iou_targets = torch.zeros_like(cls_score)
             centerness_targets = bbox_targets.new_tensor(0.)
@@ -396,7 +456,7 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
             loss_cls = self.loss_cls(
                 cls_score, labels, avg_factor=num_total_samples)
 
-        return loss_cls, loss_bbox, centerness_targets.sum()
+        return loss_cls, loss_bbox, loss_bbox_refine, centerness_targets.sum()
 
     def _get_targets_single(self,
                             flat_anchors,
@@ -604,9 +664,93 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
 
         return res + tuple(rest_results)
 
+    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'bbox_preds_refine'))
+    def get_bboxes(self,
+                   cls_scores,
+                   bbox_preds,
+                   bbox_preds_refine,
+                   score_factors=None,
+                   img_metas=None,
+                   cfg=None,
+                   rescale=False,
+                   with_nms=True,
+                   **kwargs):
+        """Transform network outputs of a batch into bbox results.
+
+        Note: When score_factors is not None, the cls_scores are
+        usually multiplied by it then obtain the real score used in NMS,
+        such as CenterNess in FCOS, IoU branch in ATSS.
+
+        Args:
+            cls_scores (list[Tensor]): Classification scores for all
+                scale levels, each is a 4D-tensor, has shape
+                (batch_size, num_priors * num_classes, H, W).
+            bbox_preds (list[Tensor]): Box energies / deltas for all
+                scale levels, each is a 4D-tensor, has shape
+                (batch_size, num_priors * 4, H, W).
+            score_factors (list[Tensor], Optional): Score factor for
+                all scale level, each is a 4D-tensor, has shape
+                (batch_size, num_priors * 1, H, W). Default None.
+            img_metas (list[dict], Optional): Image meta info. Default None.
+            cfg (mmcv.Config, Optional): Test / postprocessing configuration,
+                if None, test_cfg would be used.  Default None.
+            rescale (bool): If True, return boxes in original image space.
+                Default False.
+            with_nms (bool): If True, do nms before return boxes.
+                Default True.
+
+        Returns:
+            list[list[Tensor, Tensor]]: Each item in result_list is 2-tuple.
+                The first item is an (n, 5) tensor, where the first 4 columns
+                are bounding box positions (tl_x, tl_y, br_x, br_y) and the
+                5-th column is a score between 0 and 1. The second item is a
+                (n,) tensor where each item is the predicted class label of
+                the corresponding box.
+        """
+        assert len(cls_scores) == len(bbox_preds)
+
+        if score_factors is None:
+            # e.g. Retina, FreeAnchor, Foveabox, etc.
+            with_score_factors = False
+        else:
+            # e.g. FCOS, PAA, ATSS, AutoAssign, etc.
+            with_score_factors = True
+            assert len(cls_scores) == len(score_factors)
+
+        num_levels = len(cls_scores)
+
+        featmap_sizes = [cls_scores[i].shape[-2:] for i in range(num_levels)]
+        if not hasattr(self, 'anchor_generator'):
+            self.anchor_generator = self.prior_generator
+        mlvl_priors = self.anchor_generator.grid_priors(
+            featmap_sizes,
+            dtype=cls_scores[0].dtype,
+            device=cls_scores[0].device)
+
+        result_list = []
+
+        for img_id in range(len(img_metas)):
+            img_meta = img_metas[img_id]
+            cls_score_list = select_single_mlvl(cls_scores, img_id)
+            bbox_pred_list = select_single_mlvl(bbox_preds, img_id)
+            bbox_pred_refine_list = select_single_mlvl(
+                bbox_preds_refine, img_id)
+            if with_score_factors:
+                score_factor_list = select_single_mlvl(score_factors, img_id)
+            else:
+                score_factor_list = [None for _ in range(num_levels)]
+
+            results = self._get_bboxes_single(cls_score_list, bbox_pred_list, bbox_pred_refine_list,
+                                              score_factor_list, mlvl_priors,
+                                              img_meta, cfg, rescale, with_nms,
+                                              **kwargs)
+            result_list.append(results)
+        return result_list
+
     def _get_bboxes_single(self,
                            cls_score_list,
                            bbox_pred_list,
+                           bbox_pred_refine_list,
                            score_factor_list,
                            mlvl_priors,
                            img_meta,
@@ -653,7 +797,7 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
 
         for level_idx in range(len(cls_score_list)):
             rpn_cls_score = cls_score_list[level_idx]
-            rpn_bbox_pred = bbox_pred_list[level_idx]
+            rpn_bbox_pred = bbox_pred_refine_list[level_idx]
             assert rpn_cls_score.size()[-2:] == rpn_bbox_pred.size()[-2:]
             rpn_cls_score = rpn_cls_score.permute(1, 2, 0)
             if self.use_sigmoid_cls:

@@ -26,17 +26,13 @@ model = dict(
     rpn_head=dict(
         type='QualityOrientedRPNHeadATSS',
         in_channels=256,
-        num_dcn=2,
+        num_dcn=0,
         stacked_convs=4,
         feat_channels=256,
         strides=[8, 16, 32, 64, 128],
-        # center_sampling=False,
-        # center_sample_radius=1.5,
-        # shrink_sampling=False,
-        # shrink_sigma=[0, 0.1, 0.2, 0.3, 0.4],
-        scale_angle=True,
+        scale_angle=False,
         bbox_coder=dict(
-            type='DistanceAnglePointCoder', angle_version=angle_version),
+            type='RotatedDistancePointBBoxCoder', angle_version=angle_version),
         use_vfl=True,
         loss_cls_vfl=dict(
             type='VarifocalLoss',
@@ -45,7 +41,9 @@ model = dict(
             gamma=2.0,
             iou_weighted=True,
             loss_weight=0.25),
-        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5)),
+        refine_bbox=True,
+        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5),
+        loss_bbox_refine=dict(type='PolyGIoULoss', loss_weight=1.0)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(

@@ -1,21 +1,77 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
+import torch.nn as nn
 from abc import ABCMeta
-from mmcv.runner import BaseModule
-from mmcv.cnn import ConvModule
+from mmcv.cnn import ConvModule, xavier_init
 from mmcv.cnn.bricks import build_plugin_layer
 from mmcv.runner import BaseModule
+
 from mmrotate.core import (build_assigner, build_sampler, rbbox2result,
                            rbbox2roi)
 from ..builder import (ROTATED_HEADS, build_head, build_roi_extractor,
                        build_shared_head)
 
-import torch.nn.functional as F
-import torch.nn as nn
-from mmcv.cnn import ConvModule, build_upsample_layer, xavier_init
-from mmcv.cnn.bricks import build_plugin_layer
-from mmcv.ops.carafe import CARAFEPack
-from mmcv.runner import BaseModule, ModuleList
+
+class ChannelAttention(nn.Module):
+    def __init__(self,
+                 feat_channels):
+        super(ChannelAttention, self).__init__()
+
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.attention = ConvModule(
+            feat_channels,
+            feat_channels,
+            1,
+            conv_cfg=None,
+            padding=0,
+            stride=1,
+            groups=1,
+            norm_cfg=None,
+            act_cfg=None)
+
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
+                xavier_init(m, distribution='uniform')
+
+    def forward(self, x):
+        """Forward function."""
+        weight = self.avgpool(x)
+        weight = self.attention(weight)
+        return x * weight
+
+
+class DownSample(nn.Module):
+    def __init__(self,
+                 in_channels,
+                 out_channels):
+        super(DownSample, self).__init__()
+
+        self.ds_conv = ConvModule(
+            in_channels,
+            out_channels,
+            kernel_size=2,
+            stride=2,
+            conv_cfg=None,
+            norm_cfg=dict(type='GN', num_groups=1, requires_grad=True),
+            act_cfg=dict(type='ReLU'))
+        # self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
+        # self.down_conv = ConvModule(
+        #     in_channels,
+        #     out_channels,
+        #     1,
+        #     conv_cfg=None,
+        #     norm_cfg=dict(type='GN', num_groups=1, requires_grad=True),
+        #     act_cfg=dict(type='ReLU'))
+
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
+                xavier_init(m, distribution='uniform')
+
+    def forward(self, x):
+        x = self.ds_conv(x)
+        return x
 
 
 @ROTATED_HEADS.register_module()
@@ -43,15 +99,6 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
                  version='oc',
                  att_cfg=dict(type='ContextBlock',
                               in_channels=256, ratio=1. / 4),
-                 att_cfg1=dict(type='ContextBlock',
-                               in_channels=256, ratio=1. / 4),
-                 fpn_upsample_cfg=dict(
-                     type='carafe',
-                     up_kernel=5,
-                     up_group=1,
-                     encoder_kernel=3,
-                     encoder_dilation=1),
-                 upsample_cfg=dict(mode='nearest'),
                  conv_cfg=None,
                  norm_cfg=None,
                  act_cfg=None,
@@ -75,9 +122,6 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
         self.with_shared_head = True if shared_head is not None else False
 
         self.att_cfg = att_cfg
-        self.att_cfg1 = att_cfg1
-        self.fpn_upsample_cfg = fpn_upsample_cfg
-        self.upsample_cfg = upsample_cfg
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         self.act_cfg = act_cfg
@@ -85,129 +129,31 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
 
     def init_fusion_module(self):
         out_channels = 256
-        self.relu = nn.ReLU()
-        self.ds_conv = ConvModule(
+        self.downsample = DownSample(
             out_channels // 4,
-            out_channels,
-            kernel_size=2,
-            stride=2,
-            conv_cfg=self.conv_cfg,
-            norm_cfg=dict(type='GN', num_groups=1, requires_grad=True),
-            act_cfg=dict(type='ReLU'))  # dict(type='ReLU'))
-
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-        self.attention = ConvModule(
-            out_channels,
-            out_channels,
-            1,
-            padding=0,
-            stride=1,
-            groups=1,
-            conv_cfg=self.conv_cfg,
-            norm_cfg=self.norm_cfg,
-            act_cfg=self.act_cfg,  # dict(type='ReLU'),
-            inplace=False)
-
-        # self.attention = ConvModule(out_channels, out_channels, kernel_size=1, padding=0, stride=1,
-        #                             groups=1, bias=True),
-        # self.down_conv = ConvModule(
-        #     out_channels,
-        #     out_channels//2,
-        #     1,
-        #     conv_cfg=self.conv_cfg,
-        #     norm_cfg=self.norm_cfg,
-        #     act_cfg=dict(type='ReLU'))
-
-        # self.y_conv2 = ConvModule(
-        #     out_channels*2,
-        #     out_channels,
-        #     1,
-        #     conv_cfg=self.conv_cfg,
-        #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        #     act_cfg=self.act_cfg)
-        # self.fusion_conv = ConvModule(
-        #     out_channels * 2,
-        #     out_channels,
-        #     3,
-        #     2,
-        #     1,
-        #     conv_cfg=self.conv_cfg,
-        #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        #     act_cfg=dict(type='ReLU'),
-        #     inplace=False)
-
-        # self.down_conv2 = ConvModule(
-        #     out_channels*2,
-        #     out_channels,
-        #     1,
-        #     conv_cfg=self.conv_cfg,
-        #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        #     act_cfg=self.act_cfg)
-        # self.dw_conv = ConvModule(
-        #     out_channels//4,
-        #     out_channels//4,
-        #     kernel_size=7,
-        #     stride=2,
-        #     padding=3,
-        #     groups=out_channels//4,
-        #     conv_cfg=self.conv_cfg,
-        #     norm_cfg=self.norm_cfg,
-        #     act_cfg=self.act_cfg)
-
-        # self.pw_conv1 = ConvModule(
-        #     out_channels//4,
-        #     out_channels*2,
-        #     1,
-        #     conv_cfg=self.conv_cfg,
-        #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        #     act_cfg=dict(type='ReLU'))
-
-        # self.pw_conv2 = ConvModule(
-        #     out_channels*2,
-        #     out_channels,
-        #     1,
-        #     conv_cfg=self.conv_cfg,
-        #     norm_cfg=self.norm_cfg,
-        #     act_cfg=self.act_cfg)
-
-        self.pw_conv3 = ConvModule(
-            out_channels * 2,
+            out_channels
+        )
+        self.ca = ChannelAttention(
+            out_channels
+        )
+        self.pw_conv = ConvModule(
+            out_channels*2,
             out_channels,
             1,
             conv_cfg=self.conv_cfg,
             norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
             act_cfg=dict(type='ReLU'))
-
-        # self.fil_conv = ConvModule(
-        #     out_channels,
-        #     out_channels,
-        #     3,
-        #     conv_cfg=self.conv_cfg,
-        #     padding=1,
-        #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        #     act_cfg=dict(type='ReLU'),
-        #     inplace=False)
-        # self.fil_conv_1 = ConvModule(
-        #     out_channels,
-        #     out_channels,
-        #     3,
-        #     conv_cfg=self.conv_cfg,
-        #     padding=1,
-        #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        #     act_cfg=dict(type='ReLU'),
-        #     inplace=False)
         self.att_module = build_plugin_layer(self.att_cfg, '_att_module')[1]
-
-        # self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
     def init_weights(self):
         """Initialize the weights of module."""
         for m in self.modules():
             if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
                 xavier_init(m, distribution='uniform')
-        #     for m in self.modules():
-        #         if isinstance(m, CARAFEPack):
-        #             m.init_weights()
+
+        self.ca.init_weights()
+        self.downsample.init_weights()
+
         self.bbox_head.init_weights()
 
     def init_assigner_sampler(self):
@@ -322,65 +268,15 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
         Returns:
             dict[str, Tensor]: a dictionary of bbox_results.
         """
-
-        # x[0]为FPN P2 【256,256,256]
-
-        # y = self.y_conv(y)
-        # print(y[0].shape)
-        # print(y[1].shape)
-        # print(len(y))
-        # print(y[2].shape)
-        # print(x[0].shape)
-        # assert(1==2)
-
-        # backbone_c2 [512,512,64]
-
-        # llf_feat = self.unshuffle(y[0])
-        # llf_feat = self.fil_conv(self.fil_conv_1(llf_feat))
-        # llf_feat = self.dw_conv(y[0])
-        # llf_feat = self.pw_conv1(llf_feat)
-        # llf_feat = self.pw_conv2(llf_feat)
-        # llf_feat = llf_feat + self.ds_conv(y[0])
-        llf_feat = self.ds_conv(y[0])
-
-        fpn_weight = self.avgpool(x[0])
-        fpn_weight = self.attention(fpn_weight)
-        fpn_feats = self.relu(x[0] * fpn_weight)
-        cat_feats = torch.cat((fpn_feats, llf_feat), dim=1)
-        cat_feats = self.pw_conv3(cat_feats)
-        cat_feats = self.att_module(cat_feats)
-        cat_feats = cat_feats + fpn_feats
-        # cat_feats = self.down_conv(cat_feats)
-
-        # upsample_p2 = F.interpolate(x[0], y.shape[2:], **self.upsample_cfg)
-        # y_out = self.downsample(y_out)
-        # prev_shape = laterals[i - 1].shape[2:]
-
-        # p2_feat = x[0]
-        # upsample_out = F.interpolate(
-        #     x[0], y_out.shape[2:], **self.upsample_cfg)
-        # print(upsample_out.shape)
-        # assert (1 == 2)
-        # upsample_out = self.upsample_modules[0](x[0])
-        # upsample_p2 = self.upsample_module(x[0])
-        # cat2 = torch.cat((upsample_p2, y), dim=1)
-        # cat2 = self.fusion_conv(cat2)
-        # cat2 = self.y_conv2(cat2)
-        # cat2 = self.pw_conv(self.dw_conv(cat2))
-        # cat2 = self.att_module(cat2)
-        # cat2 = cat2 + x[0]
-
-        # cat_feats = torch.cat((p2_feat, y_out), dim=1)
-        # down_feats = self.down_conv(cat_feats)
-
-        # out_feats = self.fil_conv(self.fil_conv_1(down_feats))
-        # att_feats = self.att_module(down_feats)
-        # att_feats = p2_feat + att_feats
-
-        # att_feats = self.att_module_1(att_feats)
+        llf_feat = self.downsample(y[0])
+        fpn_feat = self.ca(x[0])
+        cat_feat = torch.cat((fpn_feat, llf_feat), dim=1)
+        cat_feat = self.pw_conv(cat_feat)
+        cat_feat = self.att_module(cat_feat)
+        cat_feat = cat_feat + fpn_feat
 
         bbox_feats = self.bbox_roi_extractor(
-            x[:self.bbox_roi_extractor.num_inputs], cat_feats, rois)
+            x[:self.bbox_roi_extractor.num_inputs], cat_feat, rois)
 
         if isinstance(bbox_feats, list):
             assert (len(bbox_feats) == 2)

@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.cnn import ConvModule, Scale, bias_init_with_prob, normal_init, constant_init
 from mmcv.ops import batched_nms
-from mmdet.core.utils import filter_scores_and_topk, select_single_mlvl
+from mmdet.core.utils import select_single_mlvl
 from mmcv.runner import force_fp32
 from mmdet.core import multi_apply, reduce_mean
 from mmdet.models.dense_heads.tood_head import TaskDecomposition
@@ -69,7 +69,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                  center_sample_radius=1.5,
                  shrink_sampling=False,
                  shrink_sigma=[0, 0.15, 0.3, 0.45, 0.6],
-                 scale_angle=True,
+                 scale_angle=False,
                  loss_cls=dict(
                      type='FocalLoss',
                      use_sigmoid=True,
@@ -84,6 +84,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                      gamma=2.0,
                      iou_weighted=True,
                      loss_weight=0.5),
+                 refine_bbox=True,
                  loss_bbox=dict(type='RotatedIoULoss', loss_weight=0.5),
                  loss_bbox_refine=dict(type='RotatedIoULoss', loss_weight=0.5),
                  norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
@@ -97,6 +98,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         self.start_level = start_level
         self.scale_angle = scale_angle
         self.angle_version = angle_version
+        self.refine_bbox = refine_bbox
 
         super(QualityOrientedRPNHead, self).__init__(
             num_classes=1,
@@ -109,7 +111,8 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         self.use_vfl = use_vfl
         if self.use_vfl:
             self.loss_cls = build_loss(loss_cls_vfl)
-        self.loss_bbox_refine = build_loss(loss_bbox_refine)
+        if self.refine_bbox:
+            self.loss_bbox_refine = build_loss(loss_bbox_refine)
 
     def _init_layers(self):
         """Initialize layers of the head."""
@@ -153,19 +156,25 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
 
         # refine
         self.idxs = range(len(self.strides))
-        self.acs = nn.ModuleList([
-            AlignConv(
-                self.in_channels,
-                self.in_channels,
-                kernel_size=3,
-                stride=s) for s in self.strides
-        ])
-        self.tood_refine_reg = nn.Conv2d(
-            self.feat_channels, self.num_base_priors * 4, 3, padding=1)
-        self.tood_refine_angle = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
-        self.refine_scales = nn.ModuleList([Scale(1.0) for _ in self.strides])
-        if self.scale_angle:
-            self.refine_scale_angle = Scale(1.0)
+        if self.refine_bbox:
+            self.acs = nn.ModuleList([
+                AlignConv(
+                    self.in_channels,
+                    self.in_channels,
+                    kernel_size=3,
+                    stride=s) for s in self.strides
+            ])
+            self.tood_refine_reg = nn.Conv2d(
+                self.feat_channels, self.num_base_priors * 4, 3, padding=1)
+            self.tood_refine_angle = nn.Conv2d(
+                self.feat_channels, 1, 3, padding=1)
+            self.refine_scales = nn.ModuleList(
+                [Scale(1.0) for _ in self.strides])
+            if self.scale_angle:
+                self.refine_scale_angle = Scale(1.0)
+        else:
+            self.acs = [None for _ in self.strides]
+            self.refine_scales = [None for _ in self.strides]
 
     def init_weights(self):
         """Initialize weights of the head."""
@@ -178,10 +187,11 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
 
         normal_init(self.tood_cls, std=0.01, bias=bias_cls)
         normal_init(self.tood_reg, std=0.01)
-        constant_init(self.tood_angle, 0)
-        normal_init(self.tood_refine_reg, std=0.01)
-        normal_init(self.tood_refine_angle, std=0.01)
-        #constant_init(self.tood_refine_angle, 0)
+        normal_init(self.tood_angle, std=0.01)
+
+        if self.refine_bbox:
+            normal_init(self.tood_refine_reg, std=0.01)
+            normal_init(self.tood_refine_angle, std=0.01)
 
     def forward(self, feats):
         """Forward features from the upstream network.
@@ -236,31 +246,27 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         bbox_pred = torch.cat([bbox_pred, angle_pred], dim=1)
 
         # refine
-        b, _, h, w = x.shape
-        point = self.prior_generator.single_level_grid_priors(
-            (h, w), idx, device=x.device)
-        point = torch.cat([point for _ in range(b)])
-        reg_dist = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
-        bbox_pred_decoded = self.bbox_coder.decode(point, reg_dist)
-        ac_feat = ac(reg_feat, bbox_pred_decoded)
-        bbox_pred_delta = refine_scale(
-            self.tood_refine_reg(ac_feat).exp()).float() * stride
-        angle_pred_delta = self.tood_refine_angle(ac_feat)
-        if self.scale_angle:
-            angle_pred_delta = self.refine_scale_angle(
-                angle_pred_delta).float()
-        bbox_pred_delta = torch.cat([bbox_pred_delta, angle_pred_delta], dim=1)
-        bbox_pred_refine = bbox_pred.detach() * bbox_pred_delta
+        if self.refine_bbox:
+            b, _, h, w = x.shape
+            point = self.prior_generator.single_level_grid_priors(
+                (h, w), idx, device=x.device)
+            point = torch.cat([point for _ in range(b)])
+            reg_dist = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
+            bbox_pred_decoded = self.bbox_coder.decode(point, reg_dist)
+            ac_feat = ac(reg_feat, bbox_pred_decoded)
+            bbox_pred_delta = refine_scale(
+                self.tood_refine_reg(ac_feat).exp()).float() * stride
+            angle_pred_delta = self.tood_refine_angle(ac_feat)
+            if self.scale_angle:
+                angle_pred_delta = self.refine_scale_angle(
+                    angle_pred_delta).float()
+            bbox_pred_delta = torch.cat(
+                [bbox_pred_delta, angle_pred_delta], dim=1)
+            bbox_pred_refine = bbox_pred.detach() + bbox_pred_delta
 
-        # if self.generating_proposals:
-        #     assert(1 == 2)
-        #     print("1")
-        #     return cls_score, bbox_pred_refine
-        # else:
-        return cls_score, bbox_pred, bbox_pred_refine
-        # elif self.generating_proposals:
-        #     print("1")
-        #     return cls_score, bbox_pred_refine
+            return cls_score, bbox_pred, bbox_pred_refine
+        else:
+            return cls_score, bbox_pred, bbox_pred
 
     @ force_fp32(apply_to=('cls_scores', 'bbox_preds', 'bbox_preds_refine'))
     def loss(self,
@@ -345,7 +351,6 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                                                             pos_bbox_preds)
             pos_decoded_target_preds = self.bbox_coder.decode(
                 pos_points, pos_bbox_targets)
-
             loss_bbox = self.loss_bbox(
                 pos_decoded_bbox_preds,
                 pos_decoded_target_preds,
@@ -354,16 +359,18 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
 
             pos_decoded_bbox_preds_refine = self.bbox_coder.decode(pos_points,
                                                                    pos_bbox_preds_refine)
-            loss_bbox_refine = self.loss_bbox(
-                pos_decoded_bbox_preds_refine,
-                pos_decoded_target_preds,
-                weight=pos_centerness_targets,
-                avg_factor=centerness_denorm)
+
+            if self.refine_bbox:
+                loss_bbox_refine = self.loss_bbox_refine(
+                    pos_decoded_bbox_preds_refine,
+                    pos_decoded_target_preds,
+                    weight=pos_centerness_targets,
+                    avg_factor=centerness_denorm)
 
             # build IoU-aware cls_score targets
             if self.use_vfl:
                 iou_targets_ini = rbbox_overlaps(
-                    pos_decoded_bbox_preds.detach(),
+                    pos_decoded_bbox_preds_refine.detach(),
                     pos_decoded_target_preds.detach(),
                     is_aligned=True).clamp(min=1e-6).view(-1)
 
@@ -373,7 +380,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                 cls_iou_targets[pos_inds, pos_labels] = pos_ious
         else:
             loss_bbox = pos_bbox_preds.sum()
-            loss_bbox_refine = pos_bbox_preds.sum()
+            loss_bbox_refine = pos_bbox_preds_refine.sum()
             if self.use_vfl:
                 cls_iou_targets = torch.zeros_like(flatten_cls_scores)
 
@@ -384,10 +391,15 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
             loss_cls = self.loss_cls(
                 flatten_cls_scores, flatten_labels, avg_factor=num_pos)
 
-        return dict(
-            loss_rpn_cls=loss_cls,
-            loss_rpn_bbox=loss_bbox,
-            loss_rpn_bbox_refine=loss_bbox_refine)
+        if self.refine_bbox:
+            return dict(
+                loss_rpn_cls=loss_cls,
+                loss_rpn_bbox=loss_bbox,
+                loss_rpn_bbox_refine=loss_bbox_refine)
+        else:
+            return dict(
+                loss_rpn_cls=loss_cls,
+                loss_rpn_bbox=loss_bbox)
 
     def get_targets(self, points, gt_bboxes_list, gt_labels_list):
         """Compute regression, classification and centerness targets for points

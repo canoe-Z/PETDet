@@ -29,13 +29,13 @@ class RotatedDistancePointBBoxCoder(BaseBBoxCoder):
 
         Args:
             points (Tensor): Shape (N, 2), The format is [x, y].
-            gt_bboxes (Tensor): Shape (N, 4), The format is "xyxy"
+            gt_bboxes (Tensor): Shape (N, 5), The format is "xywha"
             max_dis (float): Upper bound of the distance. Default None.
             eps (float): a small value to ensure target < max_dis, instead <=.
                 Default 0.1.
 
         Returns:
-            Tensor: Box transformation deltas. The shape is (N, 4).
+            Tensor: Box transformation deltas. The shape is (N, 5).
         """
         assert points.size(0) == gt_bboxes.size(0)
         assert points.size(-1) == 2
@@ -48,8 +48,8 @@ class RotatedDistancePointBBoxCoder(BaseBBoxCoder):
         Args:
             points (Tensor): Shape (B, N, 2) or (N, 2).
             pred_bboxes (Tensor): Distance from the given point to 4
-                boundaries (left, top, right, bottom). Shape (B, N, 4)
-                or (N, 4)
+                boundaries and angle (left, top, right, bottom, angle).
+                Shape (B, N, 5) or (N, 5)
             max_shape (Sequence[int] or torch.Tensor or Sequence[
                 Sequence[int]],optional): Maximum bounds for boxes, specifies
                 (H, W, C) or (H, W). If priors shape is (B, N, 4), then
@@ -57,7 +57,7 @@ class RotatedDistancePointBBoxCoder(BaseBBoxCoder):
                 and the length of max_shape should also be B.
                 Default None.
         Returns:
-            Tensor: Boxes with shape (N, 4) or (B, N, 4)
+            Tensor: Boxes with shape (N, 5) or (B, N, 5)
         """
         assert points.size(0) == pred_bboxes.size(0)
         assert points.size(-1) == 2
@@ -67,17 +67,6 @@ class RotatedDistancePointBBoxCoder(BaseBBoxCoder):
         return self.distance2rbbox(points, pred_bboxes, edge_swap, max_shape)
 
     def rbbox2distance(self, points, gt, edge_swap=True, max_dis=None, eps=0.1):
-        """Decode bounding box based on distances.
-
-        Args:
-            points (Tensor): Shape (n, 2), [x, y].
-            bbox (Tensor): Shape (n, 5), "xywht" format
-            max_dis (float): Upper bound of the distance.
-            eps (float): a small value to ensure target < max_dis, instead <=
-
-        Returns:
-            Tensor: Decoded distances.
-        """
         gt_ctr, gw, gh, ga = torch.split(gt, [2, 1, 1, 1], dim=-1)
 
         if edge_swap:
