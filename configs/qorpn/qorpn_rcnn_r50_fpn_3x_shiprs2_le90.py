@@ -78,13 +78,7 @@ model = dict(
                 type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0),
             loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0))),
     train_cfg=dict(
-        rpn=dict(
-            # assigner=dict(type='RotatedATSSAssigner', topk=9),
-            # allowed_border=-1,
-            # pos_weight=-1,
-            # iou_calculator=dict(type='RBboxOverlaps2D'),
-            # debug=False
-        ),
+        rpn=dict(),
         rpn_proposal=dict(
             nms_pre=2000,
             max_per_img=2000,
@@ -148,7 +142,6 @@ lr_config = dict(
     warmup_ratio=0.0005,
     step=[24, 33])
 fp16 = dict(loss_scale='dynamic')
-
 optimizer = dict(lr=0.02)
 
 # lr_config = dict(

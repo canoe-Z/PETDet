@@ -2,6 +2,7 @@ _base_ = [
     '../_base_/datasets/fair1mv2.py', '../_base_/schedules/schedule_1x.py',
     '../_base_/default_runtime.py'
 ]
+
 angle_version = 'le90'
 model = dict(
     type='OrientedRCNN',
@@ -134,15 +135,18 @@ data = dict(
     val=dict(version=angle_version),
     test=dict(version=angle_version))
 
-optimizer = dict(lr=0.02)
+
 
 lr_config = dict(
     policy='step',
     warmup='linear',
-    # warmup_iters=2000,
-    # warmup_ratio=0.0005,
-    warmup_iters=500,
-    warmup_ratio=1.0 / 3,
+    warmup_iters=2000,
+    warmup_ratio=0.0005,
+    # warmup_iters=500,
+    # warmup_ratio=1.0 / 3,
     step=[8, 11])
 
 fp16 = dict(loss_scale='dynamic')
+optimizer = dict(lr=0.02)
+
+

@@ -12,6 +12,27 @@ from ..builder import (ROTATED_HEADS, build_head, build_roi_extractor,
                        build_shared_head)
 
 
+class LayerNormChannel(nn.Module):
+    """
+    LayerNorm only for Channel Dimension.
+    Input: tensor in shape [B, C, H, W]
+    """
+
+    def __init__(self, num_channels, eps=1e-05):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(num_channels))
+        self.bias = nn.Parameter(torch.zeros(num_channels))
+        self.eps = eps
+
+    def forward(self, x):
+        u = x.mean(1, keepdim=True)
+        s = (x - u).pow(2).mean(1, keepdim=True)
+        x = (x - u) / torch.sqrt(s + self.eps)
+        x = self.weight.unsqueeze(-1).unsqueeze(-1) * x \
+            + self.bias.unsqueeze(-1).unsqueeze(-1)
+        return x
+
+
 class ChannelAttention(nn.Module):
     def __init__(self,
                  feat_channels):
@@ -22,10 +43,10 @@ class ChannelAttention(nn.Module):
             feat_channels,
             feat_channels,
             1,
-            conv_cfg=None,
             padding=0,
             stride=1,
             groups=1,
+            conv_cfg=None,
             norm_cfg=None,
             act_cfg=None)
 
@@ -46,23 +67,23 @@ class DownSample(nn.Module):
                  in_channels,
                  out_channels):
         super(DownSample, self).__init__()
-
+        self.norm = LayerNormChannel(in_channels)
         self.ds_conv = ConvModule(
             in_channels,
             out_channels,
             kernel_size=2,
             stride=2,
             conv_cfg=None,
-            norm_cfg=dict(type='GN', num_groups=1, requires_grad=True),
+            norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
             act_cfg=dict(type='ReLU'))
-        # self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
-        # self.down_conv = ConvModule(
-        #     in_channels,
-        #     out_channels,
-        #     1,
-        #     conv_cfg=None,
-        #     norm_cfg=dict(type='GN', num_groups=1, requires_grad=True),
-        #     act_cfg=dict(type='ReLU'))
+        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.down_conv = ConvModule(
+            in_channels,
+            out_channels,
+            1,
+            conv_cfg=None,
+            norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
+            act_cfg=dict(type='ReLU'))
 
     def init_weights(self):
         for m in self.modules():
@@ -70,8 +91,10 @@ class DownSample(nn.Module):
                 xavier_init(m, distribution='uniform')
 
     def forward(self, x):
-        x = self.ds_conv(x)
-        return x
+        x = self.norm(x)
+        x1 = self.ds_conv(x)
+        x2 = self.down_conv(self.maxpool(x))
+        return x1+x2
 
 
 @ROTATED_HEADS.register_module()

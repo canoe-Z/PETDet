@@ -13,8 +13,77 @@ from mmrotate.core import obb2xyxy
 from mmrotate.core.bbox import rbbox_overlaps
 from ..builder import ROTATED_HEADS, build_loss
 from .oriented_anchor_free_head import OrientedAnchorFreeHead
-from ..detectors.utils import AlignConv
+from ..detectors.utils import AlignConv, SharedAlignConv
 INF = 1e8
+
+
+class SimpleTaskDecomposition(nn.Module):
+    """Task decomposition module in task-aligned predictor of TOOD.
+
+    Args:
+        feat_channels (int): Number of feature channels in TOOD head.
+        stacked_convs (int): Number of conv layers in TOOD head.
+        la_down_rate (int): Downsample rate of layer attention.
+        conv_cfg (dict): Config dict for convolution layer.
+        norm_cfg (dict): Config dict for normalization layer.
+    """
+
+    def __init__(self,
+                 feat_channels,
+                 stacked_convs,
+                 conv_cfg=None,
+                 norm_cfg=None):
+        super(SimpleTaskDecomposition, self).__init__()
+        self.feat_channels = feat_channels
+        self.stacked_convs = stacked_convs
+        self.in_channels = self.feat_channels * self.stacked_convs
+        self.norm_cfg = norm_cfg
+        self.layer_attention = nn.Conv2d(
+            self.in_channels,
+            self.stacked_convs,
+            1,
+            stride=1,
+            padding=0)
+
+        self.reduction_conv = ConvModule(
+            self.in_channels,
+            self.feat_channels,
+            1,
+            stride=1,
+            padding=0,
+            conv_cfg=conv_cfg,
+            norm_cfg=norm_cfg,
+            bias=norm_cfg is None)
+
+    def init_weights(self):
+        for m in self.layer_attention.modules():
+            if isinstance(m, nn.Conv2d):
+                normal_init(m, std=0.001)
+        normal_init(self.reduction_conv.conv, std=0.01)
+
+    def forward(self, feat, avg_feat=None):
+        b, c, h, w = feat.shape
+        if avg_feat is None:
+            avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
+        weight = self.layer_attention(avg_feat)
+
+        # here we first compute the product between layer attention weight and
+        # conv weight, and then compute the convolution between new conv weight
+        # and feature map, in order to save memory and FLOPs.
+        conv_weight = weight.reshape(
+            b, 1, self.stacked_convs,
+            1) * self.reduction_conv.conv.weight.reshape(
+                1, self.feat_channels, self.stacked_convs, self.feat_channels)
+        conv_weight = conv_weight.reshape(b, self.feat_channels,
+                                          self.in_channels)
+        feat = feat.reshape(b, self.in_channels, h * w)
+        feat = torch.bmm(conv_weight, feat).reshape(b, self.feat_channels, h,
+                                                    w)
+        if self.norm_cfg is not None:
+            feat = self.reduction_conv.norm(feat)
+        feat = self.reduction_conv.activate(feat)
+
+        return feat
 
 
 @ROTATED_HEADS.register_module()
@@ -133,14 +202,12 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                     conv_cfg=conv_cfg,
                     norm_cfg=self.norm_cfg))
 
-        self.cls_decomp = TaskDecomposition(self.feat_channels,
-                                            self.stacked_convs,
-                                            self.stacked_convs * 8,
-                                            self.conv_cfg, self.norm_cfg)
-        self.reg_decomp = TaskDecomposition(self.feat_channels,
-                                            self.stacked_convs,
-                                            self.stacked_convs * 8,
-                                            self.conv_cfg, self.norm_cfg)
+        self.cls_decomp = SimpleTaskDecomposition(self.feat_channels,
+                                                  self.stacked_convs,
+                                                  self.conv_cfg, self.norm_cfg)
+        self.reg_decomp = SimpleTaskDecomposition(self.feat_channels,
+                                                  self.stacked_convs,
+                                                  self.conv_cfg, self.norm_cfg)
 
         self.tood_cls = nn.Conv2d(
             self.feat_channels,
@@ -157,13 +224,15 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         # refine
         self.idxs = range(len(self.strides))
         if self.refine_bbox:
-            self.acs = nn.ModuleList([
-                AlignConv(
-                    self.in_channels,
-                    self.in_channels,
-                    kernel_size=3,
-                    stride=s) for s in self.strides
-            ])
+            self.alignconv = SharedAlignConv(
+                self.in_channels, self.in_channels, kernel_size=3)
+            # self.acs = nn.ModuleList([
+            #     AlignConv(
+            #         self.in_channels,
+            #         self.in_channels,
+            #         kernel_size=3,
+            #         stride=s) for s in self.strides
+            # ])
             self.tood_refine_reg = nn.Conv2d(
                 self.feat_channels, self.num_base_priors * 4, 3, padding=1)
             self.tood_refine_angle = nn.Conv2d(
@@ -173,7 +242,8 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
             if self.scale_angle:
                 self.refine_scale_angle = Scale(1.0)
         else:
-            self.acs = [None for _ in self.strides]
+            self.alignconv = None
+            #self.acs = [None for _ in self.strides]
             self.refine_scales = [None for _ in self.strides]
 
     def init_weights(self):
@@ -190,6 +260,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         normal_init(self.tood_angle, std=0.01)
 
         if self.refine_bbox:
+            self.alignconv.init_weights()
             normal_init(self.tood_refine_reg, std=0.01)
             normal_init(self.tood_refine_angle, std=0.01)
 
@@ -209,10 +280,10 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                 centernesses (list[Tensor]): centerness for each scale level, \
                     each is a 4D-tensor, the channel number is num_points * 1.
         """
-        return multi_apply(self.forward_single, feats[self.start_level:], self.scales, self.acs, self.refine_scales, self.idxs,
+        return multi_apply(self.forward_single, feats[self.start_level:], self.scales, self.refine_scales, self.idxs,
                            self.strides)
 
-    def forward_single(self, x, scale, ac, refine_scale, idx, stride):
+    def forward_single(self, x, scale, refine_scale, idx, stride):
         """Forward features of a single scale level.
 
         Args:
@@ -253,7 +324,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
             point = torch.cat([point for _ in range(b)])
             reg_dist = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
             bbox_pred_decoded = self.bbox_coder.decode(point, reg_dist)
-            ac_feat = ac(reg_feat, bbox_pred_decoded)
+            ac_feat = self.alignconv(reg_feat, bbox_pred_decoded, stride)
             bbox_pred_delta = refine_scale(
                 self.tood_refine_reg(ac_feat).exp()).float() * stride
             angle_pred_delta = self.tood_refine_angle(ac_feat)

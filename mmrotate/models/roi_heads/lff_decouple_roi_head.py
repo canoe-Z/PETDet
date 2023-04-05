@@ -12,10 +12,31 @@ from ..builder import (ROTATED_HEADS, build_head, build_roi_extractor,
 
 import torch.nn.functional as F
 import torch.nn as nn
-from mmcv.cnn import ConvModule, build_upsample_layer, xavier_init
+from mmcv.cnn import ConvModule, build_upsample_layer, xavier_init, normal_init
 from mmcv.cnn.bricks import build_plugin_layer
 from mmcv.ops.carafe import CARAFEPack
 from mmcv.runner import BaseModule, ModuleList
+from timm.models.layers.norm import LayerNorm2d,GroupNorm1
+
+# class LayerNormChannel(nn.Module):
+#     """
+#     LayerNorm only for Channel Dimension.
+#     Input: tensor in shape [B, C, H, W]
+#     """
+
+#     def __init__(self, num_channels, eps=1e-05):
+#         super().__init__()
+#         self.weight = nn.Parameter(torch.ones(num_channels))
+#         self.bias = nn.Parameter(torch.zeros(num_channels))
+#         self.eps = eps
+
+#     def forward(self, x):
+#         u = x.mean(1, keepdim=True)
+#         s = (x - u).pow(2).mean(1, keepdim=True)
+#         x = (x - u) / torch.sqrt(s + self.eps)
+#         x = self.weight.unsqueeze(-1).unsqueeze(-1) * x \
+#             + self.bias.unsqueeze(-1).unsqueeze(-1)
+#         return x
 
 
 @ROTATED_HEADS.register_module()
@@ -85,28 +106,24 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
 
     def init_fusion_module(self):
         out_channels = 256
-        self.relu = nn.ReLU()
-        self.ds_conv = ConvModule(
+        self.norm1 = GroupNorm1(out_channels)
+        self.norm2 = GroupNorm1(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+
+        self.ds_conv = nn.Conv2d(
             out_channels // 4,
             out_channels,
             kernel_size=2,
-            stride=2,
-            conv_cfg=self.conv_cfg,
-            norm_cfg=dict(type='GN', num_groups=1, requires_grad=True),
-            act_cfg=dict(type='ReLU'))  # dict(type='ReLU'))
-
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-        self.attention = ConvModule(
-            out_channels,
-            out_channels,
-            1,
-            padding=0,
-            stride=1,
-            groups=1,
-            conv_cfg=self.conv_cfg,
-            norm_cfg=self.norm_cfg,
-            act_cfg=self.act_cfg,  # dict(type='ReLU'),
-            inplace=False)
+            stride=2)
+        # self.ds_conv = ConvModule(
+        #     out_channels // 4,
+        #     out_channels,
+        #     kernel_size=2,
+        #     stride=2,
+        #     conv_cfg=self.conv_cfg,
+        #     norm_cfg=dict(type='GN', num_groups=1, requires_grad=True),
+        #     act_cfg=dict(type='ReLU'))  # dict(type='ReLU'))
+        # self.layernorm = LayerNormChannel(out_channels)
 
         # self.attention = ConvModule(out_channels, out_channels, kernel_size=1, padding=0, stride=1,
         #                             groups=1, bias=True),
@@ -170,14 +187,29 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
         #     norm_cfg=self.norm_cfg,
         #     act_cfg=self.act_cfg)
 
-        self.pw_conv3 = ConvModule(
+        # self.pw_conv3 = ConvModule(
+        #     out_channels * 2,
+        #     out_channels,
+        #     1,
+        #     conv_cfg=self.conv_cfg,
+        #     norm_cfg=dict(type='GN', num_groups=1, requires_grad=True),
+        #     act_cfg=dict(type='ReLU'))
+        self.pw_conv3 = nn.Conv2d(
             out_channels * 2,
             out_channels,
-            1,
-            conv_cfg=self.conv_cfg,
-            norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-            act_cfg=dict(type='ReLU'))
+            1)
 
+        self.avg = nn.AdaptiveAvgPool2d(1)
+        self.fpn_sca = ConvModule(
+            out_channels,
+            out_channels,
+            1,
+            padding=0,
+            stride=1,
+            groups=1,
+            conv_cfg=self.conv_cfg,
+            norm_cfg=self.norm_cfg,
+            act_cfg=self.act_cfg)
         # self.fil_conv = ConvModule(
         #     out_channels,
         #     out_channels,
@@ -341,15 +373,19 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
         # llf_feat = self.pw_conv1(llf_feat)
         # llf_feat = self.pw_conv2(llf_feat)
         # llf_feat = llf_feat + self.ds_conv(y[0])
-        llf_feat = self.ds_conv(y[0])
+        # llf_feat=self.layernorm(y[0])
+        llf_feat = self.relu(self.norm1(self.ds_conv(y[0])))
+        # llf_feat = self.layernorm(llf_feat)
 
-        fpn_weight = self.avgpool(x[0])
-        fpn_weight = self.attention(fpn_weight)
-        fpn_feats = self.relu(x[0] * fpn_weight)
-        cat_feats = torch.cat((fpn_feats, llf_feat), dim=1)
-        cat_feats = self.pw_conv3(cat_feats)
-        cat_feats = self.att_module(cat_feats)
-        cat_feats = cat_feats + fpn_feats
+        fpn_weight = self.avg(x[0])
+        fpn_weight = self.fpn_sca(fpn_weight)
+        fpn_feat = x[0] * fpn_weight
+        # fpn_feat = self.layernorm(fpn_feat)
+
+        cat_feat = torch.cat((fpn_feat, llf_feat), dim=1)
+        cat_feat = self.relu(self.norm2(self.pw_conv3(cat_feat)))
+        cat_feat = self.att_module(cat_feat)
+        cat_feat = cat_feat + fpn_feat
         # cat_feats = self.down_conv(cat_feats)
 
         # upsample_p2 = F.interpolate(x[0], y.shape[2:], **self.upsample_cfg)
@@ -380,7 +416,7 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
         # att_feats = self.att_module_1(att_feats)
 
         bbox_feats = self.bbox_roi_extractor(
-            x[:self.bbox_roi_extractor.num_inputs], cat_feats, rois)
+            x[:self.bbox_roi_extractor.num_inputs], cat_feat, rois)
 
         if isinstance(bbox_feats, list):
             assert (len(bbox_feats) == 2)
