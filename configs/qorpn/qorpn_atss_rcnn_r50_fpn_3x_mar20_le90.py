@@ -32,8 +32,8 @@ model = dict(
         strides=[8, 16, 32, 64, 128],
         scale_angle=False,
         bbox_coder=dict(
-            type='RotatedDistancePointBBoxCoder', angle_version=angle_version),
-        use_vfl=True,
+            type='DistanceAnglePointCoder', angle_version=angle_version),
+        use_vfl=False,
         loss_cls_vfl=dict(
             type='VarifocalLoss',
             use_sigmoid=True,
@@ -41,7 +41,7 @@ model = dict(
             gamma=2.0,
             iou_weighted=True,
             loss_weight=0.25),
-        refine_bbox=True,
+        refine_bbox=False,
         loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5),
         loss_bbox_refine=dict(type='PolyGIoULoss', loss_weight=1.0)),
     roi_head=dict(
@@ -75,10 +75,12 @@ model = dict(
             loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0))),
     train_cfg=dict(
         rpn=dict(
-            assigner=dict(type='RotatedATSSAssigner', topk=9),
+            assigner=dict(type='RotatedATSSAssigner',
+                          #angle_version=angle_version,
+                          topk=9,
+                          iou_calculator=dict(type='RBboxOverlaps2D')),
             allowed_border=-1,
             pos_weight=-1,
-            iou_calculator=dict(type='RBboxOverlaps2D'),
             debug=False
         ),
         rpn_proposal=dict(
@@ -141,7 +143,7 @@ lr_config = dict(
     policy='step',
     warmup='linear',
     warmup_iters=2000,
-    warmup_ratio=0.0005,
+    warmup_ratio=1.0 / 2000,
     step=[24, 33])
 fp16 = dict(loss_scale='dynamic')
 

@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/datasets/mar20.py', '../_base_/schedules/schedule_3x.py',
+    '../_base_/datasets/fair1mv2.py', '../_base_/schedules/schedule_1x.py',
     '../_base_/default_runtime.py'
 ]
 
@@ -24,30 +24,25 @@ model = dict(
         add_extra_convs='on_input',
         num_outs=5),
     rpn_head=dict(
-        type='QualityOrientedRPNHead',
+        type='QualityOrientedRPNHeadATSS',
         in_channels=256,
         num_dcn=0,
-        stacked_convs=2,
+        stacked_convs=4,
         feat_channels=256,
         strides=[8, 16, 32, 64, 128],
-        center_sampling=False,
-        center_sample_radius=1.5,
-        shrink_sampling=False,
-        shrink_sigma=[0, 0.1, 0.2, 0.3, 0.4],
         scale_angle=False,
+        loss_cls_metric='FL',
+        loss_cls=dict(
+            type='FocalLoss',
+            use_sigmoid=True,
+            gamma=2.0,
+            alpha=0.25,
+            loss_weight=0.5),
         bbox_coder=dict(
             type='RotatedDistancePointBBoxCoder', angle_version=angle_version),
-        use_vfl=True,
-        loss_cls_vfl=dict(
-            type='VarifocalLoss',
-            use_sigmoid=True,
-            alpha=0.75,
-            gamma=2.0,
-            iou_weighted=True,
-            loss_weight=0.25),
         refine_bbox=False,
         loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5),
-        loss_bbox_refine=dict(type='PolyGIoULoss', loss_weight=1.0)),
+        loss_bbox_refine=dict(type='PolyGIoULoss', loss_weight=0.75)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(
@@ -64,7 +59,7 @@ model = dict(
             in_channels=256,
             fc_out_channels=1024,
             roi_feat_size=7,
-            num_classes=20,
+            num_classes=37,
             bbox_coder=dict(
                 type='DeltaXYWHAOBBoxCoder',
                 angle_range=angle_version,
@@ -79,11 +74,12 @@ model = dict(
             loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0))),
     train_cfg=dict(
         rpn=dict(
-            # assigner=dict(type='RotatedATSSAssigner', topk=9),
-            # allowed_border=-1,
-            # pos_weight=-1,
-            # iou_calculator=dict(type='RBboxOverlaps2D'),
-            # debug=False
+            assigner=dict(type='RotatedATSSAssigner',
+                          topk=9,
+                          iou_calculator=dict(type='RBboxOverlaps2D')),
+            allowed_border=-1,
+            pos_weight=-1,
+            debug=False
         ),
         rpn_proposal=dict(
             nms_pre=2000,
@@ -145,8 +141,8 @@ lr_config = dict(
     policy='step',
     warmup='linear',
     warmup_iters=2000,
-    warmup_ratio=0.0005,
-    step=[24, 33])
+    warmup_ratio=1.0 / 2000,
+    step=[8, 11])
 fp16 = dict(loss_scale='dynamic')
 
 optimizer = dict(lr=0.02)
@@ -154,7 +150,7 @@ optimizer = dict(lr=0.02)
 # lr_config = dict(
 #     policy='step',
 #     warmup='linear',
-#     warmup_iters=500,
+#     warmup_iters=1000,
 #     warmup_ratio=1.0 / 3,
 #     step=[24, 33])
 

@@ -18,7 +18,7 @@ class RotatedATSSAssigner(BaseAssigner):
     - positive integer: positive sample, index (1-based) of assigned gt
 
     Args:
-        topk (float): number of bbox selected in each level
+        topk (float): Number of bbox selected in each level.
     """
 
     def __init__(self,
@@ -28,8 +28,6 @@ class RotatedATSSAssigner(BaseAssigner):
         self.topk = topk
         self.iou_calculator = build_iou_calculator(iou_calculator)
         self.ignore_iof_thr = ignore_iof_thr
-
-    # https://github.com/sfzhang15/ATSS/blob/master/atss_core/modeling/rpn/atss/loss.py
 
     def assign(self,
                bboxes,
@@ -52,11 +50,10 @@ class RotatedATSSAssigner(BaseAssigner):
            the threshold as positive
         6. limit the positive sample's center in gt
 
-
         Args:
-            bboxes (Tensor): Bounding boxes to be assigned, shape(n, 4).
+            bboxes (Tensor): Bounding boxes to be assigned, shape(n, 5).
             num_level_bboxes (List): num of bboxes in each level
-            gt_bboxes (Tensor): Groundtruth oriented boxes, shape (k, 5).
+            gt_bboxes (Tensor): Groundtruth boxes, shape (k, 5).
             gt_bboxes_ignore (Tensor, optional): Ground truth bboxes that are
                 labelled as `ignored`, e.g., crowd boxes in COCO.
             gt_labels (Tensor, optional): Label of gt_bboxes, shape (k, ).
@@ -162,7 +159,7 @@ class RotatedATSSAssigner(BaseAssigner):
         r_ = W / 2 - offset_x
         t_ = H / 2 + offset_y
         b_ = H / 2 - offset_y
-        is_in_gts = torch.stack([l_, t_, r_, b_], dim=1).min(dim=1)[0] > 0.01
+        is_in_gts = torch.stack([l_, t_, r_, b_], dim=1).min(dim=1)[0] > 1e-8
 
         is_pos = is_pos & is_in_gts
 

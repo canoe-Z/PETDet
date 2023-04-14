@@ -6,7 +6,6 @@ from .max_convex_iou_assigner import MaxConvexIoUAssigner
 from .sas_assigner import SASAssigner
 from .rotated_atss_assigner import RotatedATSSAssigner
 from .sas_atss_assigner import SASATSSAssigner
-from .custom_atss_obb_assigner import CustomATSSObbAssigner
 
 __all__ = [
     'ConvexAssigner', 'MaxConvexIoUAssigner', 'SASAssigner', 'ATSSKldAssigner',

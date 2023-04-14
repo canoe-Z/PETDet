@@ -24,12 +24,16 @@ model = dict(
         add_extra_convs='on_input',
         num_outs=5),
     rpn_head=dict(
-        type='QualityOrientedRPNHeadATSS',
+        type='QualityOrientedRPNHead',
         in_channels=256,
         num_dcn=0,
         stacked_convs=4,
         feat_channels=256,
         strides=[8, 16, 32, 64, 128],
+        center_sampling=False,
+        center_sample_radius=1.5,
+        shrink_sampling=False,
+        shrink_sigma=[0, 0.0, 0.1, 0.2, 0.3],
         scale_angle=False,
         loss_cls=dict(
             type='FocalLoss',
@@ -46,10 +50,10 @@ model = dict(
             alpha=0.75,
             gamma=2.0,
             iou_weighted=True,
-            loss_weight=0.25),
+            loss_weight=0.5),
         refine_bbox=False,
         loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5),
-        loss_bbox_refine=dict(type='PolyGIoULoss', loss_weight=1.0)),
+        loss_bbox_refine=dict(type='PolyGIoULoss', loss_weight=0.75)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(
@@ -80,14 +84,7 @@ model = dict(
                 type='CrossEntropyLoss', use_sigmoid=False, loss_weight=1.0),
             loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0))),
     train_cfg=dict(
-        rpn=dict(
-            assigner=dict(type='RotatedATSSAssigner',
-                          topk=9,
-                          iou_calculator=dict(type='RBboxOverlaps2D')),
-            allowed_border=-1,
-            pos_weight=-1,
-            debug=False
-        ),
+        rpn=dict(),
         rpn_proposal=dict(
             nms_pre=2000,
             max_per_img=2000,
@@ -144,32 +141,13 @@ data = dict(
     val=dict(version=angle_version),
     test=dict(version=angle_version))
 
+
 lr_config = dict(
     policy='step',
     warmup='linear',
     warmup_iters=2000,
     warmup_ratio=1.0 / 2000,
     step=[8, 11])
+
 fp16 = dict(loss_scale='dynamic')
-
 optimizer = dict(lr=0.02)
-
-# lr_config = dict(
-#     policy='step',
-#     warmup='linear',
-#     warmup_iters=1000,
-#     warmup_ratio=1.0 / 3,
-#     step=[24, 33])
-
-# optimizer = dict(
-#     _delete_=True,
-#     type='AdamW',
-#     lr=0.0001,
-#     betas=(0.9, 0.999),
-#     weight_decay=0.05,
-#     paramwise_cfg=dict(
-#         custom_keys={
-#             'absolute_pos_embed': dict(decay_mult=0.),
-#             'relative_position_bias_table': dict(decay_mult=0.),
-#             'norm': dict(decay_mult=0.)
-#         }))

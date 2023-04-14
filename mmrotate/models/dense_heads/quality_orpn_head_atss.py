@@ -21,6 +21,75 @@ from ..detectors.utils import AlignConv
 INF = 1e8
 
 
+class SimpleTaskDecomposition(nn.Module):
+    """Task decomposition module in task-aligned predictor of TOOD.
+
+    Args:
+        feat_channels (int): Number of feature channels in TOOD head.
+        stacked_convs (int): Number of conv layers in TOOD head.
+        la_down_rate (int): Downsample rate of layer attention.
+        conv_cfg (dict): Config dict for convolution layer.
+        norm_cfg (dict): Config dict for normalization layer.
+    """
+
+    def __init__(self,
+                 feat_channels,
+                 stacked_convs,
+                 conv_cfg=None,
+                 norm_cfg=None):
+        super(SimpleTaskDecomposition, self).__init__()
+        self.feat_channels = feat_channels
+        self.stacked_convs = stacked_convs
+        self.in_channels = self.feat_channels * self.stacked_convs
+        self.norm_cfg = norm_cfg
+        self.layer_attention = nn.Conv2d(
+            self.in_channels,
+            self.stacked_convs,
+            1,
+            stride=1,
+            padding=0)
+
+        self.reduction_conv = ConvModule(
+            self.in_channels,
+            self.feat_channels,
+            1,
+            stride=1,
+            padding=0,
+            conv_cfg=conv_cfg,
+            norm_cfg=norm_cfg,
+            bias=norm_cfg is None)
+
+    def init_weights(self):
+        for m in self.layer_attention.modules():
+            if isinstance(m, nn.Conv2d):
+                normal_init(m, std=0.001)
+        normal_init(self.reduction_conv.conv, std=0.01)
+
+    def forward(self, feat, avg_feat=None):
+        b, c, h, w = feat.shape
+        if avg_feat is None:
+            avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
+        weight = self.layer_attention(avg_feat)
+
+        # here we first compute the product between layer attention weight and
+        # conv weight, and then compute the convolution between new conv weight
+        # and feature map, in order to save memory and FLOPs.
+        conv_weight = weight.reshape(
+            b, 1, self.stacked_convs,
+            1) * self.reduction_conv.conv.weight.reshape(
+                1, self.feat_channels, self.stacked_convs, self.feat_channels)
+        conv_weight = conv_weight.reshape(b, self.feat_channels,
+                                          self.in_channels)
+        feat = feat.reshape(b, self.in_channels, h * w)
+        feat = torch.bmm(conv_weight, feat).reshape(b, self.feat_channels, h,
+                                                    w)
+        if self.norm_cfg is not None:
+            feat = self.reduction_conv.norm(feat)
+        feat = self.reduction_conv.activate(feat)
+
+        return feat
+
+
 @ROTATED_HEADS.register_module()
 class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
     """Anchor-free head used in `FCOS <https://arxiv.org/abs/1904.01355>`_.
@@ -65,28 +134,39 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
     def __init__(self,
                  in_channels,
                  num_dcn=0,
+                 task_decomposition=True,
+                 use_sca=True,
                  start_level=0,
                  angle_version='le90',
                  prior_generator=dict(
                      type='RotatedAnchorGenerator',
-                     ratios=[1.0],
                      octave_base_scale=8,
                      scales_per_octave=1,
+                     center_offset=0.0,
+                     ratios=[1.0],
                      strides=[8, 16, 32, 64, 128]),
                  scale_angle=False,
+                 test_loss=False,
+                 loss_cls_metric='FL',
+                 initial_loss=False,
+                 initial_epoch=4,
                  loss_cls=dict(
                      type='FocalLoss',
                      use_sigmoid=True,
                      gamma=2.0,
                      alpha=0.25,
-                     loss_weight=0.5),
-                 use_vfl=True,
+                     loss_weight=0.25),
                  loss_cls_vfl=dict(
                      type='VarifocalLoss',
                      use_sigmoid=True,
                      alpha=0.75,
                      gamma=2.0,
                      iou_weighted=True,
+                     loss_weight=0.5),
+                 loss_cls_qfl=dict(
+                     type='QualityFocalLoss',
+                     use_sigmoid=True,
+                     beta=2.0,
                      loss_weight=0.5),
                  refine_bbox=True,
                  loss_bbox=dict(type='RotatedIoULoss', loss_weight=0.5),
@@ -98,6 +178,11 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
         self.scale_angle = scale_angle
         self.angle_version = angle_version
         self.refine_bbox = refine_bbox
+        self.task_decomposition = task_decomposition
+        self.use_sca = use_sca
+        self.epoch = 0  # which would be update in SetEpochInfoHook!
+        self.initial_loss = initial_loss
+        self.initial_epoch = initial_epoch
 
         super(QualityOrientedRPNHeadATSS, self).__init__(
             num_classes=1,
@@ -118,9 +203,10 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
             sampler_cfg = dict(type='PseudoSampler')
             self.sampler = build_sampler(sampler_cfg, context=self)
 
-        self.use_vfl = use_vfl
-        if self.use_vfl:
-            self.loss_cls = build_loss(loss_cls_vfl)
+        self.test_loss = test_loss
+        self.loss_cls_metric = loss_cls_metric
+        self.loss_cls_vfl = build_loss(loss_cls_vfl)
+        self.loss_cls_qfl = build_loss(loss_cls_qfl)
         if self.refine_bbox:
             self.loss_bbox_refine = build_loss(loss_bbox_refine)
 
@@ -143,14 +229,22 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                     conv_cfg=conv_cfg,
                     norm_cfg=self.norm_cfg))
 
-        self.cls_decomp = TaskDecomposition(self.feat_channels,
-                                            self.stacked_convs,
-                                            self.stacked_convs * 8,
-                                            self.conv_cfg, self.norm_cfg)
-        self.reg_decomp = TaskDecomposition(self.feat_channels,
-                                            self.stacked_convs,
-                                            self.stacked_convs * 8,
-                                            self.conv_cfg, self.norm_cfg)
+        if self.use_sca == True:
+            self.cls_decomp = SimpleTaskDecomposition(self.feat_channels,
+                                                      self.stacked_convs,
+                                                      self.conv_cfg, self.norm_cfg)
+            self.reg_decomp = SimpleTaskDecomposition(self.feat_channels,
+                                                      self.stacked_convs,
+                                                      self.conv_cfg, self.norm_cfg)
+        else:
+            self.cls_decomp = TaskDecomposition(self.feat_channels,
+                                                self.stacked_convs,
+                                                self.stacked_convs * 8,
+                                                self.conv_cfg, self.norm_cfg)
+            self.reg_decomp = TaskDecomposition(self.feat_channels,
+                                                self.stacked_convs,
+                                                self.stacked_convs * 8,
+                                                self.conv_cfg, self.norm_cfg)
 
         self.tood_cls = nn.Conv2d(
             self.feat_channels,
@@ -236,17 +330,27 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
             tuple: scores for each class, bbox predictions and centerness \
                 predictions of input feature maps.
         """
-        inter_feats = []
-        for inter_conv in self.inter_convs:
-            x = inter_conv(x)
-            inter_feats.append(x)
-        feat = torch.cat(inter_feats, 1)
-
         # task decomposition
-        avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
-        cls_feat = self.cls_decomp(feat, avg_feat)
-        reg_feat = self.reg_decomp(feat, avg_feat)
+        if self.task_decomposition:
+            inter_feats = []
+            for inter_conv in self.inter_convs:
+                x = inter_conv(x)
+                inter_feats.append(x)
+                feat = torch.cat(inter_feats, 1)
 
+            avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
+            cls_feat = self.cls_decomp(feat, avg_feat)
+            reg_feat = self.reg_decomp(feat, avg_feat)
+        else:
+            inter_feats = []
+            for inter_conv in self.inter_convs:
+                x = inter_conv(x)
+                inter_feats.append(x)
+                feat = torch.cat(inter_feats, 1)
+
+            avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
+            cls_feat = self.cls_decomp(feat, avg_feat)+inter_feats[-1]
+            reg_feat = self.reg_decomp(feat, avg_feat)+inter_feats[-1]
         # prediction
         cls_score = self.tood_cls(cls_feat)
         bbox_pred = scale(self.tood_reg(reg_feat).exp()).float() * stride
@@ -260,10 +364,11 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
             b, _, h, w = x.shape
             anchor = self.prior_generator.single_level_grid_priors(
                 (h, w), idx, device=x.device)
-            point = self.get_anchor_points(anchor)
+            point = self.anchor_center(anchor)
             point = torch.cat([point for _ in range(b)])
             reg_dist = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
-            bbox_pred_decoded = self.bbox_coder.decode(point, reg_dist)
+            bbox_pred_decoded = self.bbox_coder.decode(
+                point, reg_dist, edge_swap=False)
             ac_feat = ac(reg_feat, bbox_pred_decoded)
             bbox_pred_delta = refine_scale(
                 self.tood_refine_reg(ac_feat).exp()).float() * stride
@@ -324,7 +429,7 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
             gt_bboxes_ignore_list=gt_bboxes_ignore,
             gt_labels_list=gt_labels,
             label_channels=label_channels)
-        (labels_list, label_weights_list, bbox_targets_list, bbox_weights_list,
+        (labels_list, label_weights_list, bbox_targets_list,
          num_total_pos, num_total_neg) = cls_reg_targets
 
         num_total_samples = num_total_pos
@@ -405,13 +510,13 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
             pos_bbox_targets = bbox_targets[pos_inds]
             pos_bbox_pred = bbox_pred[pos_inds]
             pos_bbox_pred_refine = bbox_pred_refine[pos_inds]
-            pos_prior_points = self.get_anchor_points(anchors[pos_inds])
+            pos_prior_points = self.anchor_center(anchors[pos_inds])
             pos_decode_bbox_pred = self.bbox_coder.decode(pos_prior_points,
-                                                          pos_bbox_pred)
+                                                          pos_bbox_pred, edge_swap=True)
             pos_decode_bbox_pred_refine = self.bbox_coder.decode(pos_prior_points,
-                                                                 pos_bbox_pred_refine)
+                                                                 pos_bbox_pred_refine, edge_swap=True)
             pos_decode_bbox_targets = self.bbox_coder.decode(
-                pos_prior_points, pos_bbox_targets)
+                pos_prior_points, pos_bbox_targets, edge_swap=True)
 
             # regression loss
             centerness_targets = self.centerness_target(pos_bbox_targets)
@@ -432,29 +537,59 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                 loss_bbox_refine = bbox_pred.sum() * 0
 
             # build IoU-aware cls_score targets
-            if self.use_vfl:
-                iou_targets_ini = rbbox_overlaps(
-                    pos_decode_bbox_pred_refine.detach(),
-                    pos_decode_bbox_targets.detach(),
-                    is_aligned=True).clamp(min=1e-6).view(-1)
+            if self.initial_loss and self.epoch < self.initial_epoch:
+                self.cls_loss_func = self.loss_cls
+                targets = labels
+            else:
+                if self.loss_cls_metric == 'FL':
+                    self.cls_loss_func = self.loss_cls
+                    targets = labels
+                elif self.loss_cls_metric == 'VFL':
+                    self.cls_loss_func = self.loss_cls_vfl
+                    iou_targets_ini = rbbox_overlaps(
+                        pos_decode_bbox_pred_refine.detach(),
+                        pos_decode_bbox_targets.detach(),
+                        is_aligned=True).clamp(min=1e-6).view(-1)
+                    pos_labels = labels[pos_inds]
+                    pos_ious = iou_targets_ini.clone().detach()
 
-                pos_labels = labels[pos_inds]
-                pos_ious = iou_targets_ini.clone().detach()
-                cls_iou_targets = torch.zeros_like(cls_score)
-                cls_iou_targets[pos_inds, pos_labels] = pos_ious
+                    if self.test_loss:
+                        pos_ious = 1-(1-pos_ious)**2
+                    targets = torch.zeros_like(cls_score)
+                    targets[pos_inds, pos_labels] = pos_ious
+                elif self.loss_cls_metric == 'QFL':
+                    self.cls_loss_func = self.loss_cls_qfl
+                    iou_targets_ini = rbbox_overlaps(
+                        pos_decode_bbox_pred_refine.detach(),
+                        pos_decode_bbox_targets.detach(),
+                        is_aligned=True).clamp(min=1e-6).view(-1)
+
+                    pos_labels = labels[pos_inds]
+                    pos_ious = iou_targets_ini.clone().detach()
+                    score = cls_score.new_zeros(labels.shape)
+                    score[pos_inds] = pos_ious
+                    targets = (labels, score)
         else:
             loss_bbox = bbox_pred.sum() * 0
             loss_bbox_refine = bbox_pred_refine.sum() * 0
-            if self.use_vfl:
-                cls_iou_targets = torch.zeros_like(cls_score)
             centerness_targets = bbox_targets.new_tensor(0.)
+            if self.initial_loss and self.epoch < self.initial_epoch:
+                self.cls_loss_func = self.loss_cls
+                targets = labels
+            else:
+                if self.loss_cls_metric == 'FL':
+                    self.cls_loss_func = self.loss_cls
+                    targets = labels
+                elif self.loss_cls_metric == 'VFL':
+                    self.cls_loss_func = self.loss_cls_vfl
+                    targets = torch.zeros_like(cls_score)
+                elif self.loss_cls_metric == 'QFL':
+                    self.cls_loss_func = self.loss_cls_qfl
+                    score = cls_score.new_zeros(labels.shape)
+                    targets = (labels, score)
 
-        if self.use_vfl:
-            loss_cls = self.loss_cls(
-                cls_score, cls_iou_targets, avg_factor=num_total_samples)
-        else:
-            loss_cls = self.loss_cls(
-                cls_score, labels, avg_factor=num_total_samples)
+        loss_cls = self.cls_loss_func(
+            cls_score, targets, avg_factor=num_total_samples)
 
         return loss_cls, loss_bbox, loss_bbox_refine, centerness_targets.sum()
 
@@ -497,7 +632,6 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                 labels_list (list[Tensor]): Labels of all anchor
                 label_weights_list (list[Tensor]): Label weights of all anchor
                 bbox_targets_list (list[Tensor]): BBox targets of all anchor
-                bbox_weights_list (list[Tensor]): BBox weights of all anchor
                 pos_inds (int): Indices of positive anchor
                 neg_inds (int): Indices of negative anchor
                 sampling_result: object `SamplingResult`, sampling result.
@@ -521,7 +655,6 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
 
         num_valid_anchors = anchors.shape[0]
         bbox_targets = torch.zeros_like(anchors)
-        bbox_weights = torch.zeros_like(anchors)
         labels = anchors.new_full((num_valid_anchors, ),
                                   self.num_classes,
                                   dtype=torch.long)
@@ -530,10 +663,11 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
         pos_inds = sampling_result.pos_inds
         neg_inds = sampling_result.neg_inds
         if len(pos_inds) > 0:
+            # point-based
             pos_bbox_targets = self.bbox_coder.encode(
-                self.get_anchor_points(sampling_result.pos_bboxes), sampling_result.pos_gt_bboxes)
+                self.anchor_center(sampling_result.pos_bboxes), sampling_result.pos_gt_bboxes)
             bbox_targets[pos_inds, :] = pos_bbox_targets
-            bbox_weights[pos_inds, :] = 1.0
+
             if gt_labels is None:
                 # Only rpn gives gt_labels as None
                 # Foreground is the first class since v2.5.0
@@ -557,9 +691,8 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
             label_weights = unmap(label_weights, num_total_anchors,
                                   inside_flags)
             bbox_targets = unmap(bbox_targets, num_total_anchors, inside_flags)
-            bbox_weights = unmap(bbox_weights, num_total_anchors, inside_flags)
 
-        return (labels, label_weights, bbox_targets, bbox_weights, pos_inds,
+        return (labels, label_weights, bbox_targets, pos_inds,
                 neg_inds, sampling_result)
 
     def get_targets(self,
@@ -638,8 +771,8 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
             img_metas,
             label_channels=label_channels,
             unmap_outputs=unmap_outputs)
-        (all_labels, all_label_weights, all_bbox_targets, all_bbox_weights,
-         pos_inds_list, neg_inds_list, sampling_results_list) = results[:7]
+        (all_labels, all_bbox_targets, all_bbox_weights,
+         pos_inds_list, neg_inds_list, sampling_results_list) = results[:6]
         rest_results = list(results[7:])  # user-added return values
         # no valid anchors
         if any([labels is None for labels in all_labels]):
@@ -649,13 +782,11 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
         num_total_neg = sum([max(inds.numel(), 1) for inds in neg_inds_list])
         # split targets to a list w.r.t. multiple levels
         labels_list = images_to_levels(all_labels, num_level_anchors)
-        label_weights_list = images_to_levels(all_label_weights,
-                                              num_level_anchors)
         bbox_targets_list = images_to_levels(all_bbox_targets,
                                              num_level_anchors)
         bbox_weights_list = images_to_levels(all_bbox_weights,
                                              num_level_anchors)
-        res = (labels_list, label_weights_list, bbox_targets_list,
+        res = (labels_list, bbox_targets_list,
                bbox_weights_list, num_total_pos, num_total_neg)
         if return_sampling_results:
             res = res + (sampling_results_list, )
@@ -865,7 +996,7 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
         points = torch.cat(mlvl_valid_points)
         rpn_bbox_pred = torch.cat(mlvl_bboxes)
         proposals = self.bbox_coder.decode(
-            self.get_anchor_points(points), rpn_bbox_pred)
+            self.anchor_center(points), rpn_bbox_pred, edge_swap=True)
         ids = torch.cat(level_ids)
 
         if cfg.min_bbox_size >= 0:
@@ -936,14 +1067,6 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                     top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
         return torch.sqrt(centerness_targets)
 
-    def get_anchor_points(self, anchors):
-        """Compute centerness targets.
-
-        Args:
-            pos_bbox_targets (Tensor): BBox targets of positive bboxes in shape
-                (num_pos, 4)
-        Returns:
-            Tensor: Centerness target.
-        """
-        # only calculate pos centerness targets, otherwise there may be nan
+    def anchor_center(self, anchors):
+        # Get anchor centers from anchors.
         return anchors[..., :2]

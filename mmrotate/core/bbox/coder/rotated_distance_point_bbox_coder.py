@@ -24,7 +24,7 @@ class RotatedDistancePointBBoxCoder(BaseBBoxCoder):
         self.clip_border = clip_border
         self.angle_version = angle_version
 
-    def encode(self, points, gt_bboxes, edge_swap=True, max_dis=None, eps=0.1):
+    def encode(self, points, gt_bboxes, max_dis=None, eps=0.1):
         """Encode bounding box to distances.
 
         Args:
@@ -40,7 +40,7 @@ class RotatedDistancePointBBoxCoder(BaseBBoxCoder):
         assert points.size(0) == gt_bboxes.size(0)
         assert points.size(-1) == 2
         assert gt_bboxes.size(-1) == 5
-        return self.rbbox2distance(points, gt_bboxes, edge_swap, max_dis, eps)
+        return self.rbbox2distance(points, gt_bboxes, max_dis, eps)
 
     def decode(self, points, pred_bboxes, edge_swap=True, max_shape=None):
         """Decode distance prediction to bounding box.
@@ -66,21 +66,8 @@ class RotatedDistancePointBBoxCoder(BaseBBoxCoder):
             max_shape = None
         return self.distance2rbbox(points, pred_bboxes, edge_swap, max_shape)
 
-    def rbbox2distance(self, points, gt, edge_swap=True, max_dis=None, eps=0.1):
+    def rbbox2distance(self, points, gt, max_dis=None, eps=0.1):
         gt_ctr, gw, gh, ga = torch.split(gt, [2, 1, 1, 1], dim=-1)
-
-        if edge_swap:
-            dtheta1 = norm_angle(ga, self.angle_version)
-            dtheta2 = norm_angle(ga + np.pi / 2, self.angle_version)
-            abs_dtheta1 = torch.abs(dtheta1)
-            abs_dtheta2 = torch.abs(dtheta2)
-            gw_regular = torch.where(abs_dtheta1 < abs_dtheta2, gw, gh)
-            gh_regular = torch.where(abs_dtheta1 < abs_dtheta2, gh, gw)
-            gw, gh = gw_regular, gh_regular
-            ga = torch.where(abs_dtheta1 < abs_dtheta2, dtheta1, dtheta2)
-        else:
-            ga = norm_angle(ga, self.angle_version)
-
         cos, sin = torch.cos(ga), torch.sin(ga)
         Matrix = torch.cat([cos, sin, -sin, cos], dim=-
                            1).reshape(points.size(0), 2, 2)
@@ -104,7 +91,11 @@ class RotatedDistancePointBBoxCoder(BaseBBoxCoder):
         bbox_targets = torch.cat([bbox_targets, ga], dim=-1)
         return bbox_targets
 
-    def distance2rbbox(self, points, distance, edge_swap=True, max_shape=None):
+    def distance2rbbox(self,
+                       points,
+                       distance,
+                       edge_swap=True,
+                       max_shape=None):
         distance, theta = distance.split([4, 1], dim=-1)
 
         cos, sin = torch.cos(theta), torch.sin(theta)
@@ -114,7 +105,7 @@ class RotatedDistancePointBBoxCoder(BaseBBoxCoder):
         gw, gh = wh.split([1, 1], dim=-1)
         offset_t = (distance[..., 2:] - distance[..., :2]) / 2
         offset_t = offset_t.unsqueeze(-1)
-        offset = torch.matmul(M, offset_t).squeeze(-1)
+        offset = torch.bmm(M, offset_t).squeeze(-1)
         ctr = points + offset
         theta = norm_angle(theta, self.angle_version)
 

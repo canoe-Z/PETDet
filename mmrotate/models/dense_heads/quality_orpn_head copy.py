@@ -152,16 +152,15 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                      alpha=0.75,
                      gamma=2.0,
                      iou_weighted=True,
-                     loss_weight=0.25),
+                     loss_weight=0.5),
                  loss_target_scale=False,
                  use_aux_loss_cls=False,
-                 aux_loss_poch=4,
                  loss_cls_aux=dict(
                      type='FocalLoss',
                      use_sigmoid=True,
                      gamma=2.0,
                      alpha=0.25,
-                     loss_weight=0.25),
+                     loss_weight=0.5),
                  refine_bbox=True,
                  loss_bbox=dict(type='RotatedIoULoss', loss_weight=0.5),
                  loss_bbox_refine=dict(type='RotatedIoULoss', loss_weight=0.5),
@@ -177,8 +176,6 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         self.scale_angle = scale_angle
         self.angle_version = angle_version
         self.refine_bbox = refine_bbox
-        self.epoch = 0  # which would be update in SetEpochInfoHook!
-        self.aux_loss_epoch = aux_loss_poch
 
         super(QualityOrientedRPNHead, self).__init__(
             num_classes=1,
@@ -190,11 +187,11 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
 
         self.use_vfl = use_vfl
         self.use_aux_loss_cls = use_aux_loss_cls
-        self.loss_target_scale = loss_target_scale
         if self.use_vfl:
             self.loss_cls = build_loss(loss_cls_vfl)
             if self.use_aux_loss_cls:
                 self.loss_cls_aux = build_loss(loss_cls_aux)
+            self.loss_target_scale = loss_target_scale
         if self.refine_bbox:
             self.loss_bbox_refine = build_loss(loss_bbox_refine)
 
@@ -263,7 +260,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
 
     def init_weights(self):
         """Initialize weights of the head."""
-        bias_cls = bias_init_with_prob(0.075)
+        bias_cls = bias_init_with_prob(0.09)
         for m in self.inter_convs:
             normal_init(m.conv, std=0.01)
 
@@ -478,17 +475,17 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
             loss_cls = self.loss_cls(
                 flatten_cls_scores, cls_iou_targets, avg_factor=num_pos)
 
-            if self.use_aux_loss_cls and self.epoch < self.aux_loss_epoch:
-                # pos_ious_mean = pos_ious.mean()
+            if self.use_aux_loss_cls:
+                pos_ious_mean = pos_ious.mean()
                 loss_cls_aux = self.loss_cls_aux(
                     flatten_cls_scores, flatten_labels, avg_factor=num_pos)
-                loss_cls = loss_cls
-                # loss_cls_aux = loss_cls_aux*(1-pos_ious_mean)
+                loss_cls = loss_cls*pos_ious_mean
+                loss_cls_aux = loss_cls_aux*(1-pos_ious_mean)
         else:
             loss_cls = self.loss_cls(
                 flatten_cls_scores, flatten_labels, avg_factor=num_pos)
 
-        if self.use_aux_loss_cls and self.epoch < self.aux_loss_epoch:
+        if self.use_aux_loss_cls:
             if self.refine_bbox:
                 return dict(
                     loss_rpn_cls=loss_cls,
@@ -687,7 +684,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                     top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
         return torch.sqrt(centerness_targets)
 
-    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'bbox_preds_refine'))
+    @ force_fp32(apply_to=('cls_scores', 'bbox_preds', 'bbox_preds_refine'))
     def get_bboxes(self,
                    cls_scores,
                    bbox_preds,

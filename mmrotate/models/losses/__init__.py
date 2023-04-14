@@ -9,6 +9,7 @@ from .smooth_focal_loss import SmoothFocalLoss
 from .spatial_border_loss import SpatialBorderLoss
 from .poly_iou_loss import PolyIoULoss, PolyGIoULoss
 from .softmax_focal_loss import SoftmaxFocalLoss
+from .qrloss import QRFocalLoss
 
 __all__ = [
     'GDLoss', 'GDLoss_v1', 'KFLoss', 'ConvexGIoULoss', 'BCConvexGIoULoss',

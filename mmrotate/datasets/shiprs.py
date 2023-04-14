@@ -1,13 +1,11 @@
 import mmcv
-from mmcv import print_log
-
-from mmdet.datasets.coco import CocoDataset
-from mmdet.datasets.api_wrappers import COCO, COCOeval
 import numpy as np
 from collections import OrderedDict
+from mmcv import print_log
+from mmdet.datasets.coco import CocoDataset
 
+from mmrotate.core import eval_rbbox_map, poly2obb_np
 from mmrotate.core.evaluation import eval_rbbox_recalls
-from mmrotate.core import eval_rbbox_map, obb2poly_np, poly2obb_np
 from .builder import ROTATED_DATASETS
 
 

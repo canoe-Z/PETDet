@@ -37,17 +37,17 @@ model = dict(
         scale_angle=False,
         bbox_coder=dict(
             type='RotatedDistancePointBBoxCoder', angle_version=angle_version),
-        use_vfl=True,
+        use_vfl=False,
         loss_cls_vfl=dict(
             type='VarifocalLoss',
             use_sigmoid=True,
             alpha=0.75,
             gamma=2.0,
             iou_weighted=True,
-            loss_weight=0.25),
+            loss_weight=0.5),
         refine_bbox=True,
         loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5),
-        loss_bbox_refine=dict(type='PolyGIoULoss', loss_weight=1.0)),
+        loss_bbox_refine=dict(type='PolyGIoULoss', loss_weight=0.75)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(
@@ -136,17 +136,12 @@ data = dict(
     test=dict(version=angle_version))
 
 
-
 lr_config = dict(
     policy='step',
     warmup='linear',
     warmup_iters=2000,
-    warmup_ratio=0.0005,
-    # warmup_iters=500,
-    # warmup_ratio=1.0 / 3,
+    warmup_ratio=1.0 / 2000,
     step=[8, 11])
 
 fp16 = dict(loss_scale='dynamic')
 optimizer = dict(lr=0.02)
-
-

@@ -48,3 +48,6 @@ class OrientedRCNN(RotatedTwoStageDetector):
         roi_outs = self.roi_head.forward_dummy(x, proposals)
         outs = outs + (roi_outs, )
         return outs
+
+    def set_epoch(self, epoch):
+        self.rpn_head.epoch = epoch
