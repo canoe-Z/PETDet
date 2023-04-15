@@ -155,7 +155,7 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                      use_sigmoid=True,
                      gamma=2.0,
                      alpha=0.25,
-                     loss_weight=0.25),
+                     loss_weight=0.5),
                  loss_cls_vfl=dict(
                      type='VarifocalLoss',
                      use_sigmoid=True,

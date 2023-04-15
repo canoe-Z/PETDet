@@ -31,6 +31,7 @@ model = dict(
         feat_channels=256,
         strides=[8, 16, 32, 64, 128],
         scale_angle=False,
+        loss_cls_metric='FL',
         loss_cls=dict(
             type='FocalLoss',
             use_sigmoid=True,
@@ -39,17 +40,9 @@ model = dict(
             loss_weight=0.5),
         bbox_coder=dict(
             type='RotatedDistancePointBBoxCoder', angle_version=angle_version),
-        use_vfl=False,
-        loss_cls_vfl=dict(
-            type='VarifocalLoss',
-            use_sigmoid=True,
-            alpha=0.75,
-            gamma=2.0,
-            iou_weighted=True,
-            loss_weight=0.25),
         refine_bbox=False,
         loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5),
-        loss_bbox_refine=dict(type='PolyGIoULoss', loss_weight=1.0)),
+        loss_bbox_refine=dict(type='PolyGIoULoss', loss_weight=0.75)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(

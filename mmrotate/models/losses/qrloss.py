@@ -59,7 +59,7 @@ def qr_focal_loss(pred, target, alpha=0.5, beta=2.0):
         reduction='none') * focal_weight
 
     # iou < 0.4
-    focal_weight = alpha * iou[pos_rcnn_neg].pow(2.0) * \
+    focal_weight = alpha * iou[pos_rcnn_neg] * \
         (1 - pred_sigmoid[pos_rcnn_neg, pos_rcnn_neg_label]).abs().pow(beta)
     onelabel = focal_weight.new_ones(
         pred[pos_rcnn_neg, pos_rcnn_neg_label].shape)
