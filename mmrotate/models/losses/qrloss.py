@@ -48,9 +48,9 @@ def qr_focal_loss(pred, target, alpha=0.5, beta=2.0):
 
     # positives are supervised by bbox quality (IoU) score
     # iou >= 0.4
-    def func_iou(iou):
-        return 1 - (1 - iou).pow(2.0)
-    focal_weight = alpha * func_iou(iou[pos_rcnn_pos]) * \
+    # def func_iou(iou):
+    #     return 1 - (1 - iou).pow(2.0)
+    focal_weight = alpha * iou[pos_rcnn_pos] * \
         (1 - pred_sigmoid[pos_rcnn_pos, pos_rcnn_pos_label]).abs().pow(beta)
     onelabel = focal_weight.new_ones(
         pred[pos_rcnn_pos, pos_rcnn_pos_label].shape)
@@ -60,7 +60,7 @@ def qr_focal_loss(pred, target, alpha=0.5, beta=2.0):
 
     # iou < 0.4
     focal_weight = alpha * iou[pos_rcnn_neg] * \
-        (1 - pred_sigmoid[pos_rcnn_neg, pos_rcnn_neg_label]).abs().pow(beta)
+        (1 - pred_sigmoid[pos_rcnn_neg, pos_rcnn_neg_label]).abs().pow(beta*2)
     onelabel = focal_weight.new_ones(
         pred[pos_rcnn_neg, pos_rcnn_neg_label].shape)
     loss[pos_rcnn_neg, pos_rcnn_neg_label] = F.binary_cross_entropy_with_logits(
