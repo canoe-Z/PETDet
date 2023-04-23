@@ -9,7 +9,7 @@ from mmdet.models.losses.utils import weighted_loss
 
 @mmcv.jit(derivate=True, coderize=True)
 @weighted_loss
-def qr_focal_loss(pred, target, alpha=0.5, beta=2.0):
+def qr_focal_loss(pred, target, alpha=0.75, beta=1.5, gamma=2.0):
     r"""Quality Focal Loss (QFL) is from `Generalized Focal Loss: Learning
     Qualified and Distributed Bounding Boxes for Dense Object Detection
     <https://arxiv.org/abs/2006.04388>`_.
@@ -33,7 +33,7 @@ def qr_focal_loss(pred, target, alpha=0.5, beta=2.0):
 
     # negatives are supervised by 0 quality score
     pred_sigmoid = pred.sigmoid()
-    focal_weight = (1 - alpha) * pred_sigmoid.pow(beta)
+    focal_weight = alpha * pred_sigmoid.pow(gamma)
     zerolabel = focal_weight.new_zeros(pred.shape)
     loss = F.binary_cross_entropy_with_logits(
         pred, zerolabel, reduction='none') * focal_weight
@@ -49,9 +49,9 @@ def qr_focal_loss(pred, target, alpha=0.5, beta=2.0):
     # positives are supervised by bbox quality (IoU) score
     # iou >= 0.4
     # def func_iou(iou):
-    #     return 1 - (1 - iou).pow(2.0)
-    focal_weight = alpha * iou[pos_rcnn_pos] * \
-        (1 - pred_sigmoid[pos_rcnn_pos, pos_rcnn_pos_label]).abs().pow(beta)
+    #     return iou.pow(0.5)
+    focal_weight = (1 - alpha) * \
+        (1 - pred_sigmoid[pos_rcnn_pos, pos_rcnn_pos_label]).abs().pow(gamma)
     onelabel = focal_weight.new_ones(
         pred[pos_rcnn_pos, pos_rcnn_pos_label].shape)
     loss[pos_rcnn_pos, pos_rcnn_pos_label] = F.binary_cross_entropy_with_logits(
@@ -59,8 +59,8 @@ def qr_focal_loss(pred, target, alpha=0.5, beta=2.0):
         reduction='none') * focal_weight
 
     # iou < 0.4
-    focal_weight = alpha * iou[pos_rcnn_neg] * \
-        (1 - pred_sigmoid[pos_rcnn_neg, pos_rcnn_neg_label]).abs().pow(beta*2)
+    focal_weight = (1 - alpha) * beta * \
+        (1 - pred_sigmoid[pos_rcnn_neg, pos_rcnn_neg_label]).abs().pow(gamma)
     onelabel = focal_weight.new_ones(
         pred[pos_rcnn_neg, pos_rcnn_neg_label].shape)
     loss[pos_rcnn_neg, pos_rcnn_neg_label] = F.binary_cross_entropy_with_logits(
@@ -94,6 +94,7 @@ class QRFocalLoss(nn.Module):
                  use_sigmoid=True,
                  alpha=0.5,
                  beta=2.0,
+                 gamma=2.0,
                  reduction='mean',
                  loss_weight=1.0,
                  activated=False):
@@ -102,6 +103,7 @@ class QRFocalLoss(nn.Module):
         self.use_sigmoid = use_sigmoid
         self.alpha = alpha
         self.beta = beta
+        self.gamma = gamma
         self.reduction = reduction
         self.loss_weight = loss_weight
         self.activated = activated
@@ -138,6 +140,7 @@ class QRFocalLoss(nn.Module):
                 weight,
                 alpha=self.alpha,
                 beta=self.beta,
+                gamma=self.gamma,
                 reduction=reduction,
                 avg_factor=avg_factor)
         else:

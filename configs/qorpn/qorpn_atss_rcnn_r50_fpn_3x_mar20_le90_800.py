@@ -40,9 +40,7 @@ model = dict(
             loss_weight=0.5),
         bbox_coder=dict(
             type='RotatedDistancePointBBoxCoder', angle_version=angle_version),
-        refine_bbox=False,
-        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5),
-        loss_bbox_refine=dict(type='PolyGIoULoss', loss_weight=0.75)),
+        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(
@@ -76,7 +74,8 @@ model = dict(
         rpn=dict(
             assigner=dict(type='RotatedATSSAssigner',
                           topk=9,
-                          iou_calculator=dict(type='RBboxOverlaps2D')),
+                          iou_calculator=dict(type='RBboxOverlaps2D'),
+                          ignore_iof_thr=-1),
             allowed_border=-1,
             pos_weight=-1,
             debug=False

@@ -1,23 +1,23 @@
-_base_ = ['./qorpn_rcnn_r50_fpn_1x_mar20_le90.py']
+_base_ = ['./qorpn_atss_rcnn_r50_fpn_1x_fair1m_le90_baseline3_p2_p3.py']
 
 model = dict(
-    rpn_head=dict(
-        shrink_sigma=[0, 0.15, 0.3, 0.45, 0.6]
-    ),
     train_cfg=dict(
         rpn_proposal=dict(
-            nms_pre=500,
+            nms_pre=2000,
             max_per_img=500,
         ),
         rcnn=dict(
             sampler=dict(
-                _delete_=True,
-                type='RPseudoSampler'),
+                type='RRandomSampler',
+                num=256,
+                pos_fraction=0.5,
+                neg_pos_ub=-1,
+                add_gt_as_proposals=True),
             debug=False),
     ),
     test_cfg=dict(
         rpn=dict(
-            nms_pre=500,
+            nms_pre=2000,
             max_per_img=500),
         rcnn=dict(
             nms_pre=500,

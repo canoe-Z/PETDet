@@ -102,7 +102,7 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         self.act_cfg = act_cfg
-        self.init_fusion_module()
+        #self.init_fusion_module()
 
     def init_fusion_module(self):
         out_channels = 256
@@ -374,18 +374,18 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
         # llf_feat = self.pw_conv2(llf_feat)
         # llf_feat = llf_feat + self.ds_conv(y[0])
         # llf_feat=self.layernorm(y[0])
-        llf_feat = self.relu(self.norm1(self.ds_conv(y[0])))
+        # llf_feat = self.relu(self.norm1(self.ds_conv(y[0])))
         # llf_feat = self.layernorm(llf_feat)
 
-        fpn_weight = self.avg(x[0])
-        fpn_weight = self.fpn_sca(fpn_weight)
-        fpn_feat = x[0] * fpn_weight
+        # fpn_weight = self.avg(x[0])
+        # fpn_weight = self.fpn_sca(fpn_weight)
+        # fpn_feat = x[0] * fpn_weight
         # fpn_feat = self.layernorm(fpn_feat)
 
-        cat_feat = torch.cat((fpn_feat, llf_feat), dim=1)
-        cat_feat = self.relu(self.norm2(self.pw_conv3(cat_feat)))
-        cat_feat = self.att_module(cat_feat)
-        cat_feat = cat_feat + fpn_feat
+        # cat_feat = torch.cat((fpn_feat, llf_feat), dim=1)
+        # cat_feat = self.relu(self.norm2(self.pw_conv3(cat_feat)))
+        # cat_feat = self.att_module(cat_feat)
+        # cat_feat = cat_feat + fpn_feat
         # cat_feats = self.down_conv(cat_feats)
 
         # upsample_p2 = F.interpolate(x[0], y.shape[2:], **self.upsample_cfg)
@@ -416,7 +416,7 @@ class LFFDecoupleHeadRoIHead(BaseModule, metaclass=ABCMeta):
         # att_feats = self.att_module_1(att_feats)
 
         bbox_feats = self.bbox_roi_extractor(
-            x[:self.bbox_roi_extractor.num_inputs], cat_feat, rois)
+            x[:self.bbox_roi_extractor.num_inputs], x[0], rois)
 
         if isinstance(bbox_feats, list):
             assert (len(bbox_feats) == 2)

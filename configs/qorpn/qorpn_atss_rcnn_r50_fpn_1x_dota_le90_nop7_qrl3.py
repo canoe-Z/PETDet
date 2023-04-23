@@ -1,5 +1,5 @@
 _base_ = [
-    './qorpn_atss_rcnn_r50_fpn_3x_mar20_le90.py'
+    './qorpn_atss_rcnn_r50_fpn_1x_dota_le90_nop7.py'
 ]
 model = dict(
     rpn_head=dict(
@@ -7,6 +7,7 @@ model = dict(
         loss_cls_qfl=dict(
             type='QRFocalLoss',
             use_sigmoid=True,
-            alpha=0.25,
-            beta=2.0,
-            loss_weight=0.5)))
+            alpha=0.5,
+            beta=1.0,
+            gamma=2.0,
+            loss_weight=0.25)))

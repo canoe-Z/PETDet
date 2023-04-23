@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/datasets/fair1mv2.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/dotav1.py', '../_base_/schedules/schedule_1x.py',
     '../_base_/default_runtime.py'
 ]
 
@@ -21,21 +21,14 @@ model = dict(
         in_channels=[256, 512, 1024, 2048],
         out_channels=256,
         start_level=1,
-        #add_extra_convs='on_input',
-        num_outs=4),
+        add_extra_convs='on_input',
+        num_outs=5),
     rpn_head=dict(
         type='QualityOrientedRPNHeadATSS',
         in_channels=256,
         stacked_convs=4,
         feat_channels=256,
-        strides=[8, 16, 32, 64],
-        prior_generator=dict(
-            type='RotatedAnchorGenerator',
-            octave_base_scale=8,
-            scales_per_octave=1,
-            center_offset=0.0,
-            ratios=[1.0],
-            strides=[8, 16, 32, 64]),
+        strides=[8, 16, 32, 64, 128],
         scale_angle=False,
         loss_cls_metric='FL',
         loss_cls=dict(
@@ -63,7 +56,7 @@ model = dict(
             in_channels=256,
             fc_out_channels=1024,
             roi_feat_size=7,
-            num_classes=37,
+            num_classes=15,
             bbox_coder=dict(
                 type='DeltaXYWHAOBBoxCoder',
                 angle_range=angle_version,
@@ -89,7 +82,6 @@ model = dict(
         rpn_proposal=dict(
             nms_pre=2000,
             max_per_img=2000,
-            score_thr=0.0,
             nms=dict(type='nms', iou_threshold=0.8),
             min_bbox_size=0),
         rcnn=dict(
@@ -113,7 +105,6 @@ model = dict(
         rpn=dict(
             nms_pre=2000,
             max_per_img=2000,
-            score_thr=0.0,
             nms=dict(type='nms', iou_threshold=0.8),
             min_bbox_size=0),
         rcnn=dict(
@@ -154,6 +145,7 @@ fp16 = dict(loss_scale='dynamic')
 
 optimizer = dict(lr=0.02)
 
+checkpoint_config = dict(interval=1)
 # lr_config = dict(
 #     policy='step',
 #     warmup='linear',

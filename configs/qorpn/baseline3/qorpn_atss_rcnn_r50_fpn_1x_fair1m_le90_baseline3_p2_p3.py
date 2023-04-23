@@ -1,6 +1,7 @@
-_base_ = ['./rotated_atss_oriented_rcnn_r50_fpn_1x_fair1m_le90.py']
+_base_ = [
+    './qorpn_atss_rcnn_r50_fpn_1x_fair1m_le90_baseline3.py'
+]
 
-angle_version = 'le90'
 model = dict(
     neck=dict(
         _delete_=True,
@@ -11,9 +12,8 @@ model = dict(
         add_extra_convs='on_input',
         num_outs=6),
     rpn_head=dict(
-        version=angle_version,
-        anchor_generator=dict(
-            strides=[8, 16, 32, 64, 128])),
+        start_level=1,
+        strides=[8, 16, 32, 64, 128]),
     roi_head=dict(
         bbox_roi_extractor=dict(
             featmap_strides=[4, 8, 16, 32])))

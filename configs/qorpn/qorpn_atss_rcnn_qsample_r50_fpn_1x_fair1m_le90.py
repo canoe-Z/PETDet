@@ -1,4 +1,4 @@
-_base_ = ['./qorpn_rcnn_r50_fpn_3x_mar20_le90.py']
+_base_ = ['./qorpn_atss_rcnn_r50_fpn_1x_fair1m_le90_baseline3.py']
 
 model = dict(
     train_cfg=dict(

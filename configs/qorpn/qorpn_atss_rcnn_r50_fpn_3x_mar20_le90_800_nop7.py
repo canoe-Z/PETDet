@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/datasets/fair1mv2.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/mar20_800.py', '../_base_/schedules/schedule_3x.py',
     '../_base_/default_runtime.py'
 ]
 
@@ -26,6 +26,7 @@ model = dict(
     rpn_head=dict(
         type='QualityOrientedRPNHeadATSS',
         in_channels=256,
+        num_dcn=0,
         stacked_convs=4,
         feat_channels=256,
         strides=[8, 16, 32, 64],
@@ -63,7 +64,7 @@ model = dict(
             in_channels=256,
             fc_out_channels=1024,
             roi_feat_size=7,
-            num_classes=37,
+            num_classes=20,
             bbox_coder=dict(
                 type='DeltaXYWHAOBBoxCoder',
                 angle_range=angle_version,
@@ -82,14 +83,13 @@ model = dict(
                           topk=9,
                           iou_calculator=dict(type='RBboxOverlaps2D'),
                           ignore_iof_thr=-1),
-            allowed_border=-1,
+            allowed_border=0,
             pos_weight=-1,
             debug=False
         ),
         rpn_proposal=dict(
             nms_pre=2000,
             max_per_img=2000,
-            score_thr=0.0,
             nms=dict(type='nms', iou_threshold=0.8),
             min_bbox_size=0),
         rcnn=dict(
@@ -113,7 +113,6 @@ model = dict(
         rpn=dict(
             nms_pre=2000,
             max_per_img=2000,
-            score_thr=0.0,
             nms=dict(type='nms', iou_threshold=0.8),
             min_bbox_size=0),
         rcnn=dict(
@@ -128,7 +127,7 @@ img_norm_cfg = dict(
 train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations', with_bbox=True),
-    dict(type='RResize', img_scale=(1024, 1024)),
+    dict(type='RResize', img_scale=(800, 800)),
     dict(
         type='RRandomFlip',
         flip_ratio=[0.25, 0.25, 0.25],
@@ -149,7 +148,7 @@ lr_config = dict(
     warmup='linear',
     warmup_iters=2000,
     warmup_ratio=1.0 / 2000,
-    step=[8, 11])
+    step=[24, 33])
 fp16 = dict(loss_scale='dynamic')
 
 optimizer = dict(lr=0.02)
