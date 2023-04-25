@@ -94,7 +94,7 @@ class DownSample(nn.Module):
         x = self.norm(x)
         x1 = self.ds_conv(x)
         x2 = self.down_conv(self.maxpool(x))
-        return x1+x2
+        return x1 + x2
 
 
 @ROTATED_HEADS.register_module()

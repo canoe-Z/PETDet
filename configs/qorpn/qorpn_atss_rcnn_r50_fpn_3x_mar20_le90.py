@@ -21,15 +21,20 @@ model = dict(
         in_channels=[256, 512, 1024, 2048],
         out_channels=256,
         start_level=1,
-        add_extra_convs='on_input',
-        num_outs=5),
+        num_outs=4),
     rpn_head=dict(
         type='QualityOrientedRPNHeadATSS',
         in_channels=256,
-        num_dcn=0,
         stacked_convs=4,
         feat_channels=256,
-        strides=[8, 16, 32, 64, 128],
+        strides=[8, 16, 32, 64],
+        prior_generator=dict(
+            type='RotatedAnchorGenerator',
+            octave_base_scale=8,
+            scales_per_octave=1,
+            center_offset=0.0,
+            ratios=[1.0],
+            strides=[8, 16, 32, 64]),
         scale_angle=False,
         loss_cls_metric='FL',
         loss_cls=dict(
@@ -40,9 +45,7 @@ model = dict(
             loss_weight=0.5),
         bbox_coder=dict(
             type='RotatedDistancePointBBoxCoder', angle_version=angle_version),
-        refine_bbox=False,
-        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5),
-        loss_bbox_refine=dict(type='PolyGIoULoss', loss_weight=0.75)),
+        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(
@@ -76,7 +79,8 @@ model = dict(
         rpn=dict(
             assigner=dict(type='RotatedATSSAssigner',
                           topk=9,
-                          iou_calculator=dict(type='RBboxOverlaps2D')),
+                          iou_calculator=dict(type='RBboxOverlaps2D'),
+                          ignore_iof_thr=-1),
             allowed_border=-1,
             pos_weight=-1,
             debug=False
@@ -84,6 +88,7 @@ model = dict(
         rpn_proposal=dict(
             nms_pre=2000,
             max_per_img=2000,
+            score_thr=0.0,
             nms=dict(type='nms', iou_threshold=0.8),
             min_bbox_size=0),
         rcnn=dict(
@@ -107,6 +112,7 @@ model = dict(
         rpn=dict(
             nms_pre=2000,
             max_per_img=2000,
+            score_thr=0.0,
             nms=dict(type='nms', iou_threshold=0.8),
             min_bbox_size=0),
         rcnn=dict(
@@ -121,7 +127,7 @@ img_norm_cfg = dict(
 train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations', with_bbox=True),
-    dict(type='RResize', img_scale=(1024, 1024)),
+    dict(type='RResize', img_scale=(800, 800)),
     dict(
         type='RRandomFlip',
         flip_ratio=[0.25, 0.25, 0.25],

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from ..builder import ROTATED_DETECTORS
+from ..builder import ROTATED_DETECTORS, build_neck
 from .oriented_rcnn import OrientedRCNN
 
 
@@ -10,10 +10,12 @@ class OrientedRCNNLFF(OrientedRCNN):
     def __init__(self,
                  backbone,
                  rpn_head,
+                 # llf_module,
                  roi_head,
                  train_cfg,
                  test_cfg,
                  neck=None,
+                 lff_module=None,
                  pretrained=None,
                  init_cfg=None):
         super(OrientedRCNNLFF, self).__init__(
@@ -26,12 +28,20 @@ class OrientedRCNNLFF(OrientedRCNN):
             pretrained=pretrained,
             init_cfg=init_cfg)
 
+        #self.lff_module = lff_module
+        self.lff_module = build_neck(lff_module)
+
+    @property
+    def with_lff(self):
+        """bool: whether the detector has RPN"""
+        return hasattr(self, 'lff_module') and self.lff_module is not None
+
     def extract_feat(self, img):
         """Directly extract features from the backbone+neck."""
-        x, y = self.backbone(img)
+        x = self.backbone(img)
         if self.with_neck:
             x = self.neck(x)
-        return x, y
+        return x
 
     def forward_train(self,
                       img,
@@ -70,7 +80,7 @@ class OrientedRCNNLFF(OrientedRCNN):
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-        x, y = self.extract_feat(img)
+        x = self.extract_feat(img)
 
         losses = dict()
 
@@ -90,7 +100,9 @@ class OrientedRCNNLFF(OrientedRCNN):
         else:
             proposal_list = proposals
 
-        roi_losses = self.roi_head.forward_train(x, y, img_metas, proposal_list,
+        if self.with_lff:
+            x = self.lff_module(x)
+        roi_losses = self.roi_head.forward_train(x, img_metas, proposal_list,
                                                  gt_bboxes, gt_labels,
                                                  gt_bboxes_ignore, gt_masks,
                                                  **kwargs)
@@ -105,7 +117,7 @@ class OrientedRCNNLFF(OrientedRCNN):
                                 rescale=False):
         """Async test without augmentation."""
         assert self.with_bbox, 'Bbox head must be implemented.'
-        x, y = self.extract_feat(img)
+        x = self.extract_feat(img)
 
         if proposals is None:
             proposal_list = await self.rpn_head.async_simple_test_rpn(
@@ -113,21 +125,25 @@ class OrientedRCNNLFF(OrientedRCNN):
         else:
             proposal_list = proposals
 
+        if self.with_lff:
+            x = self.lff_module(x)
         return await self.roi_head.async_simple_test(
-            x, y, proposal_list, img_meta, rescale=rescale)
+            x, proposal_list, img_meta, rescale=rescale)
 
     def simple_test(self, img, img_metas, proposals=None, rescale=False):
         """Test without augmentation."""
 
         assert self.with_bbox, 'Bbox head must be implemented.'
-        x, y = self.extract_feat(img)
+        x = self.extract_feat(img)
         if proposals is None:
             proposal_list = self.rpn_head.simple_test_rpn(x, img_metas)
         else:
             proposal_list = proposals
 
+        if self.with_lff:
+            x = self.lff_module(x)
         return self.roi_head.simple_test(
-            x, y, proposal_list, img_metas, rescale=rescale)
+            x, proposal_list, img_metas, rescale=rescale)
 
     def aug_test(self, imgs, img_metas, rescale=False):
         """Test with augmentations.
@@ -135,7 +151,8 @@ class OrientedRCNNLFF(OrientedRCNN):
         If rescale is False, then returned bboxes and masks will fit the scale
         of imgs[0].
         """
-        x, y = self.extract_feats(imgs)
-        proposal_list = self.rpn_head.aug_test_rpn(x, img_metas)
-        return self.roi_head.aug_test(
-            x, y, proposal_list, img_metas, rescale=rescale)
+        raise NotImplementedError
+        # x, y = self.extract_feats(imgs)
+        # proposal_list = self.rpn_head.aug_test_rpn(x, img_metas)
+        # return self.roi_head.aug_test(
+        #     x, y, proposal_list, img_metas, rescale=rescale)
