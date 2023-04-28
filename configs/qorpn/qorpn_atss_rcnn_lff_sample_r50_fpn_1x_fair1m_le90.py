@@ -1,10 +1,10 @@
-_base_ = ['./qorpn_atss_rcnn_r50_fpn_1x_fair1m_le90_baseline3.py']
+_base_ = ['./qorpn_atss_rcnn_lff_r50_fpn_1x_fair1m_le90.py']
 
 model = dict(
     train_cfg=dict(
         rpn_proposal=dict(
-            nms_pre=500,
-            max_per_img=500,
+            nms_pre=2000,
+            max_per_img=1000,
         ),
         rcnn=dict(
             sampler=dict(
@@ -17,10 +17,10 @@ model = dict(
     ),
     test_cfg=dict(
         rpn=dict(
-            nms_pre=500,
-            max_per_img=500),
+            nms_pre=2000,
+            max_per_img=1000),
         rcnn=dict(
-            nms_pre=500,
-            max_per_img=500)
+            nms_pre=1000,
+            max_per_img=1000)
     )
 )

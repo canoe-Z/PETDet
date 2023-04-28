@@ -1,39 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 import torch.nn as nn
-from mmcv.cnn import ConvModule, normal_init, xavier_init
+from mmcv.cnn import ConvModule, xavier_init
+import torch.nn.functional as F
 from mmcv.runner import BaseModule
-
 from ..builder import ROTATED_NECKS
-
-
-class ChannelAttention(nn.Module):
-    def __init__(self,
-                 feat_channels):
-        super(ChannelAttention, self).__init__()
-
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-        self.attention = ConvModule(
-            feat_channels,
-            feat_channels,
-            1,
-            padding=0,
-            stride=1,
-            groups=1,
-            conv_cfg=None,
-            norm_cfg=None,
-            act_cfg=None)
-
-    def init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                normal_init(m, std=0.001)
-
-    def forward(self, x):
-        """Forward function."""
-        weight = self.avgpool(x)
-        weight = self.attention(weight)
-        return x * weight
 
 
 @ROTATED_NECKS.register_module()
@@ -50,59 +21,55 @@ class LFF(BaseModule):
         self.act_cfg = act_cfg
         self.init_cfg = init_cfg
 
-        self.sca = ChannelAttention(feat_channels * 2)
-        self.ds_conv = ConvModule(
-            feat_channels,
-            feat_channels,
-            kernel_size=3,
-            padding=1,
-            stride=2,
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.channel_attention = ConvModule(
+            feat_channels * 2,
+            feat_channels * 2,
+            1,
+            padding=0,
+            stride=1,
+            groups=1,
             conv_cfg=None,
             norm_cfg=None,
             act_cfg=None)
         self.down_conv = ConvModule(
-            feat_channels * 2,
+            feat_channels,
             feat_channels,
             1,
             conv_cfg=None,
             norm_cfg=None,
             act_cfg=None)
+        upsample_cfg = dict(mode='nearest')
+        self.upsample_cfg = upsample_cfg.copy()
+        self.gamma = nn.Parameter(torch.ones(
+            (1, feat_channels, 1, 1)), requires_grad=True)
 
     def init_weights(self):
         """Initialize the weights of module."""
         for m in self.modules():
             if isinstance(m, (nn.Conv2d)):
                 xavier_init(m, distribution='uniform')
-        self.sca.init_weights()
 
     def forward(self, inputs):
-        inputs = list(inputs)
         """Forward function."""
-        # build laterals
-        # for i in range(len(inputs)):
-        #     inputs[i] = self.layernorm[i](inputs[i])
-
-        # for i in range(len(inputs[:-1])):
-        #     prev_shape = inputs[i].shape[2:]
-        #     feat = F.interpolate(
-        #         inputs[i + 1], size=prev_shape, **self.upsample_cfg_b)
-        #     feat = torch.cat([inputs[i], feat], dim=1)
-        #     weight = self.avgpool(feat)
-        #     weight = self.attention(weight)
-        #     feat = feat * weight
-        #     inputs[i] = inputs[i] + self.down_conv(feat)
-        # print(range(len(inputs[1:]), 1, -1))
-        for i in range(len(inputs[1:]), 0, -1):  # reversed
-            # prev_shape = inputs[i].shape[2:]
-            # feat = F.interpolate(
-            #     inputs[i + 1], size=prev_shape, **self.upsample_cfg_b)
-            # print(i)
-            feat = self.ds_conv(inputs[i - 1])
+        inputs = list(inputs)
+        
+        for i in range(len(inputs[:-1])):
+            prev_shape = inputs[i].shape[2:]
+            feat = F.interpolate(
+                inputs[i + 1], size=prev_shape, **self.upsample_cfg)
             feat = torch.cat([inputs[i], feat], dim=1)
-            feat = self.sca(feat)
-            # weight = self.avgpool(feat)
-            # weight = self.attention(weight)
-            # feat = feat * weight
-            inputs[i] = inputs[i] + self.down_conv(feat)
 
-        return inputs[1:]
+            # Channel Attention
+            weight = self.avgpool(feat)
+            weight = self.channel_attention(weight)
+            feat = feat * weight
+
+            # Hadamard Product
+            feat1, feat2 = torch.chunk(feat, 2, dim=1)
+            feat = feat1 * feat2
+            feat = self.down_conv(feat)
+
+            inputs[i] = inputs[i] + self.gamma * feat
+
+        return inputs[:-1]

@@ -12,6 +12,7 @@ CONFIG=$WORK_DIR'/'$CONFIG_NAME'.py'
 CHECKPOINT=$WORK_DIR'/latest.pth'
 SAVE_DIR='save_dirs/'$CONFIG_NAME
 
+rm -rf $SAVE_DIR
 PYTHONPATH="$(dirname $0)/..":$PYTHONPATH \
 python -m torch.distributed.launch \
     --nnodes=$NNODES \

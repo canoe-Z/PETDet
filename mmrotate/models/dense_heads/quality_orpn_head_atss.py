@@ -9,13 +9,11 @@ from mmdet.core import images_to_levels, multi_apply, reduce_mean, unmap
 from mmdet.core.utils import select_single_mlvl
 
 from mmrotate.core import (build_assigner, build_prior_generator,
-                           build_sampler, obb2xyxy, multiclass_nms_rotated,
-                           rotated_anchor_inside_flags)
+                           build_sampler, obb2xyxy, rotated_anchor_inside_flags)
 from mmrotate.core.bbox import rbbox_overlaps
 from ..builder import ROTATED_HEADS, build_loss
 from .oriented_anchor_free_head import OrientedAnchorFreeHead
 from .utils import get_num_level_anchors_inside
-from mmcv.ops.nms import nms_rotated
 INF = 1e8
 
 
@@ -872,10 +870,9 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
             self.anchor_center(points), rpn_bbox_pred, edge_swap=True)
         ids = torch.cat(level_ids)
 
-        valid_mask = scores > cfg.score_thr
         if cfg.min_bbox_size >= 0:
             w, h = proposals[:, 2], proposals[:, 3]
-            valid_mask = valid_mask & (w > cfg.min_bbox_size) & (h > cfg.min_bbox_size)
+            valid_mask = (w > cfg.min_bbox_size) & (h > cfg.min_bbox_size)
             if not valid_mask.all():
                 proposals = proposals[valid_mask]
                 scores = scores[valid_mask]

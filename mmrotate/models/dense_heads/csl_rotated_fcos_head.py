@@ -88,7 +88,7 @@ class CSLRFCOSHead(RotatedFCOSHead):
             dict[str, Tensor]: A dictionary of loss components.
         """
         assert len(cls_scores) == len(bbox_preds) \
-               == len(angle_preds) == len(centernesses)
+            == len(angle_preds) == len(centernesses)
         featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
         all_level_points = self.prior_generator.grid_priors(
             featmap_sizes,
@@ -196,8 +196,8 @@ class CSLRFCOSHead(RotatedFCOSHead):
         num_gts = gt_labels.size(0)
         if num_gts == 0:
             return gt_labels.new_full((num_points,), self.num_classes), \
-                   gt_bboxes.new_zeros((num_points, 4)), \
-                   gt_bboxes.new_zeros((num_points, self.coding_len))
+                gt_bboxes.new_zeros((num_points, 4)), \
+                gt_bboxes.new_zeros((num_points, self.coding_len))
 
         labels, bbox_targets, angle_targets = \
             super(CSLRFCOSHead, self)._get_target_single(gt_bboxes,
