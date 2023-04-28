@@ -324,6 +324,9 @@ class RotatedBBoxHead(BaseModule):
                     losses.update(acc_)
                 else:
                     losses['acc'] = accuracy(cls_score, labels)
+                    fg_mask = labels != self.num_classes
+                    losses['fg_acc'] = accuracy(
+                        cls_score[fg_mask], labels[fg_mask])
         if bbox_pred is not None:
             bg_class_ind = self.num_classes
             # 0~self.num_classes-1 are FG, self.num_classes is BG
@@ -527,7 +530,7 @@ class RotatedBBoxHead(BaseModule):
             pos_is_gts_ = pos_is_gts[i]
 
             bboxes = self.rotated_regress_by_class(bboxes_, label_, bbox_pred_,
-                                           img_meta_)
+                                                   img_meta_)
 
             # filter gt bboxes
             pos_keep = 1 - pos_is_gts_
@@ -555,7 +558,8 @@ class RotatedBBoxHead(BaseModule):
 
         if not self.reg_class_agnostic:
             label = label * 5
-            inds = torch.stack((label, label + 1, label + 2, label + 3,label + 4), 1)
+            inds = torch.stack(
+                (label, label + 1, label + 2, label + 3, label + 4), 1)
             bbox_pred = torch.gather(bbox_pred, 1, inds)
         assert bbox_pred.size(1) == 5
 
