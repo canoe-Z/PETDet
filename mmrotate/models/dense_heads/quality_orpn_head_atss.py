@@ -885,7 +885,7 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
             dets = dets[keep]
             return dets[:cfg.max_per_img]
         else:
-            return proposals.new_zeros(0, 5)
+            return proposals.new_zeros(0, 6)
 
     def get_anchors(self, featmap_sizes, img_metas, device='cuda'):
         """Get anchors according to feature map sizes.

@@ -40,13 +40,15 @@ def softmax_focal_loss(pred,
     # The default value of ignore_index is the same as F.cross_entropy
     ignore_index = -100 if ignore_index is None else ignore_index
     # element-wise losses
-    ce = F.cross_entropy(
+    loss = F.cross_entropy(
         pred,
         label,
         weight=class_weight,
         reduction='none',
         ignore_index=ignore_index)
-    pt = torch.exp(-ce)
+    bg_class_ind = pred.size(1) - 1
+    bg_mask = label == bg_class_ind
+    pt = torch.exp(-loss)
 
     # average loss over non-ignored elements
     # pytorch's official cross_entropy average loss over non-ignored elements
@@ -55,16 +57,13 @@ def softmax_focal_loss(pred,
         avg_factor = label.numel() - (label == ignore_index).sum().item()
 
     # apply weights and do the reduction
-    if weight is not None:
-        weight = weight[label]
-    else:
+    if weight is None:
         weight = torch.ones_like(pred)
 
-    focal = weight * ((1 - pt) ** gamma)
-    loss = focal * ce
-    avg_factor = weight.sum()
+    focal_weight = weight
+    focal_weight[bg_mask] = weight[bg_mask] * (1 - pt[bg_mask]).pow(gamma)
     loss = weight_reduce_loss(
-        loss, weight=None, reduction=reduction, avg_factor=avg_factor)
+        loss, weight=focal_weight, reduction=reduction, avg_factor=avg_factor)
 
     return loss
 
@@ -156,11 +155,6 @@ class SoftmaxFocalLoss(nn.Module):
                 self.class_weight, device=cls_score.device)
         else:
             class_weight = None
-
-        if self.alpha is not None:
-            weight = torch.ones_like(label).float()
-            weight[:-1] = self.alpha
-            weight[-1] = 1 - self.alpha
 
         loss_cls = self.loss_weight * softmax_focal_loss(
             cls_score,

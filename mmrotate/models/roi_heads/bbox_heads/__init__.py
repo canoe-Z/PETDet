@@ -6,9 +6,9 @@ from .convfc_rbbox_head import (RotatedConvFCBBoxHead,
 from .double_rbbox_head import RotatedDoubleConvFCBBoxHead
 from .gv_bbox_head import GVBBoxHead
 from .rotated_bbox_head import RotatedBBoxHead
-from .roi_attention_rbbox_head import UnsharedConvFCRoIAttentionBBoxHead,Shared2FCRoIAttentionBBoxHead
 from .decouple_rbbox_head import RotatedDecoupleBBoxHead
 from .experiment_rbbox_head import ExperimentBBoxHead
+from .fe_rbbox_head import FineGrainedEnhancedHead, FineGrainedEnhancedHeadRotatedShared2FCBBoxHead
 __all__ = [
     'RotatedBBoxHead', 'RotatedConvFCBBoxHead', 'RotatedShared2FCBBoxHead','RotatedShared4Conv1FCBBoxHead',
     'GVBBoxHead', 'RotatedKFIoUShared2FCBBoxHead','RotatedDoubleConvFCBBoxHead'

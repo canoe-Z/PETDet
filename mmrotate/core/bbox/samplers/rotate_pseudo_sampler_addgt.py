@@ -12,8 +12,8 @@ class RPseudoSamplerGT(BaseSampler):
     """A pseudo sampler that does not do sampling actually."""
 
     def __init__(self,
-                 num,
-                 pos_fraction,
+                 num=256,
+                 pos_fraction=0.25,
                  neg_pos_ub=-1,
                  add_gt_as_proposals=True,
                  **kwargs):
