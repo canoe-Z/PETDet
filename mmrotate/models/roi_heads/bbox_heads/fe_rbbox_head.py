@@ -16,11 +16,11 @@ from mmrotate.core.bbox import rbbox_overlaps
 class FineGrainedEnhancedHead(RotatedBBoxHead):
     def __init__(self,
                  num_shared_convs=0,
-                 num_shared_fcs=0,
+                 num_shared_fcs=1,
                  num_cls_convs=0,
-                 num_cls_fcs=0,
+                 num_cls_fcs=1,
                  num_reg_convs=0,
-                 num_reg_fcs=0,
+                 num_reg_fcs=1,
                  conv_out_channels=256,
                  fc_out_channels=1024,
                  beta=2.0,
@@ -75,7 +75,6 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
             if self.num_reg_fcs == 0:
                 self.reg_last_dim *= self.roi_feat_area
 
-        self.relu = nn.ReLU(inplace=True)
         # reconstruct fc_cls and fc_reg since input channels are changed
         if self.with_cls:
             if self.custom_cls_channels:
@@ -101,10 +100,19 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
                     layer='Linear',
                     override=[
                         dict(name='shared_fcs'),
-                        dict(name='cls_fcs'),
+                        dict(name='cls_fcs2'),
+                        # dict(type='Constant', name='cls_fcs', val=0, bias=1),
                         dict(name='reg_fcs')
                     ])
             ]
+            self.init_cfg += [
+                dict(
+                    type='Normal', std=0.001, override=dict(name='cls_fcs'))
+            ]
+        self.norm = nn.BatchNorm2d(num_features=self.in_channels)
+        self.norm2 = nn.BatchNorm1d(num_features=self.fc_out_channels)
+        self.gelu = nn.GELU()
+        self.cls_fcs2 = nn.Linear(self.cls_last_dim, self.fc_out_channels)
 
     def _add_conv_fc_branch(self,
                             num_branch_convs,
@@ -149,6 +157,7 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
 
     def forward(self, x):
         """Forward function."""
+        x = self.norm(x)
         if self.num_shared_convs > 0:
             for conv in self.shared_convs:
                 x = conv(x)
@@ -160,7 +169,8 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
             x = x.flatten(1)
 
             for fc in self.shared_fcs:
-                x = self.relu(fc(x))
+                x = self.gelu(fc(x))
+
         # separate branches
         x_cls = x
         x_reg = x
@@ -172,7 +182,9 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
                 x_cls = self.avg_pool(x_cls)
             x_cls = x_cls.flatten(1)
         for fc in self.cls_fcs:
-            x_cls = self.relu(fc(x_cls))
+            x_cls = x_cls + self.gelu(fc(x_cls)) * x_cls
+            x_cls = self.norm2(x_cls)
+        x_cls = self.gelu(self.cls_fcs2(x_cls))
 
         for conv in self.reg_convs:
             x_reg = conv(x_reg)
@@ -181,7 +193,7 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
                 x_reg = self.avg_pool(x_reg)
             x_reg = x_reg.flatten(1)
         for fc in self.reg_fcs:
-            x_reg = self.relu(fc(x_reg))
+            x_reg = self.gelu(fc(x_reg))
 
         cls_score = self.fc_cls(x_cls) if self.with_cls else None
         bbox_pred = self.fc_reg(x_reg) if self.with_reg else None
@@ -344,8 +356,10 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
                     t2 = min(1., x.max())
                     y = (x - t1 + EPS) / (t2 - t1 + EPS)
                     return y
-                joint_weight = (pos_ious * normalize(bbox_targets[pos_inds, -1])).pow(0.5)
-                weight[pos_inds] = torch.exp(self.beta * joint_weight) * joint_weight
+                joint_weight = (
+                    pos_ious * normalize(bbox_targets[pos_inds, -1])).pow(0.5)
+                weight[pos_inds] = torch.exp(
+                    self.beta * joint_weight) * joint_weight
 
             loss_cls_ = self.loss_cls(
                 cls_score,
