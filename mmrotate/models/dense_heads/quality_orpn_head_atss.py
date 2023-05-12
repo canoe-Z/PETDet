@@ -31,11 +31,13 @@ class SimpleTaskDecomposition(nn.Module):
     def __init__(self,
                  feat_channels,
                  stacked_convs,
+                 enable_sa=False,
                  conv_cfg=None,
                  norm_cfg=None):
         super(SimpleTaskDecomposition, self).__init__()
         self.feat_channels = feat_channels
         self.stacked_convs = stacked_convs
+        self.enable_sa = enable_sa
         self.in_channels = self.feat_channels * self.stacked_convs
         self.norm_cfg = norm_cfg
         self.layer_attention = nn.Conv2d(
@@ -55,10 +57,21 @@ class SimpleTaskDecomposition(nn.Module):
             norm_cfg=norm_cfg,
             bias=norm_cfg is None)
 
+        if self.enable_sa:
+            self.spatial_attention = nn.Conv2d(
+                1, 1, 3, stride=1, padding=1)
+            self.sigmoid = nn.Sigmoid()
+            # self.gamma = nn.Parameter(torch.ones(
+            #     (1, feat_channels, 1, 1)), requires_grad=True)
+
     def init_weights(self):
         for m in self.layer_attention.modules():
             if isinstance(m, nn.Conv2d):
                 normal_init(m, std=0.001)
+        if self.enable_sa:
+            for m in self.spatial_attention.modules():
+                if isinstance(m, nn.Conv2d):
+                    normal_init(m, std=0.001)
         normal_init(self.reduction_conv.conv, std=0.01)
 
     def forward(self, feat, avg_feat=None):
@@ -82,6 +95,10 @@ class SimpleTaskDecomposition(nn.Module):
         if self.norm_cfg is not None:
             feat = self.reduction_conv.norm(feat)
         feat = self.reduction_conv.activate(feat)
+
+        if self.enable_sa:
+            spatial_weight = torch.mean(feat, dim=1, keepdim=True)
+            feat = feat * self.sigmoid(self.spatial_attention(spatial_weight))
 
         return feat
 
@@ -139,36 +156,22 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                      ratios=[1.0],
                      strides=[8, 16, 32, 64, 128]),
                  scale_angle=False,
-                 loss_cls_metric='FL',
-                 initial_loss=False,
-                 initial_epoch=4,
+                 use_fpn_feature=False,
+                 enable_sa=True,
                  loss_cls=dict(
                      type='FocalLoss',
                      use_sigmoid=True,
                      gamma=2.0,
                      alpha=0.25,
                      loss_weight=0.5),
-                 loss_cls_vfl=dict(
-                     type='VarifocalLoss',
-                     use_sigmoid=True,
-                     alpha=0.75,
-                     gamma=2.0,
-                     iou_weighted=True,
-                     loss_weight=0.5),
-                 loss_cls_qfl=dict(
-                     type='QualityFocalLoss',
-                     use_sigmoid=True,
-                     beta=2.0,
-                     loss_weight=0.5),
                  loss_bbox=dict(type='RotatedIoULoss', loss_weight=0.5),
                  norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
                  **kwargs):
         self.start_level = start_level
         self.scale_angle = scale_angle
+        self.enable_sa = enable_sa
         self.angle_version = angle_version
-        self.epoch = 0  # which would be update in SetEpochInfoHook!
-        self.initial_loss = initial_loss
-        self.initial_epoch = initial_epoch
+        self.use_fpn_feature = use_fpn_feature
 
         super(QualityOrientedRPNHeadATSS, self).__init__(
             num_classes=1,
@@ -189,10 +192,6 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
             sampler_cfg = dict(type='PseudoSampler')
             self.sampler = build_sampler(sampler_cfg, context=self)
 
-        self.loss_cls_metric = loss_cls_metric
-        self.loss_cls_vfl = build_loss(loss_cls_vfl)
-        self.loss_cls_qfl = build_loss(loss_cls_qfl)
-
     def _init_layers(self):
         """Initialize layers of the head."""
         self.inter_convs = nn.ModuleList()
@@ -208,12 +207,19 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                     conv_cfg=self.conv_cfg,
                     norm_cfg=self.norm_cfg))
 
+        if self.use_fpn_feature:
+            num_layers = self.stacked_convs + 1
+        else:
+            num_layers = self.stacked_convs
         self.cls_decomp = SimpleTaskDecomposition(self.feat_channels,
-                                                  self.stacked_convs,
+                                                  num_layers,
+                                                  self.enable_sa,
                                                   self.conv_cfg, self.norm_cfg)
         self.reg_decomp = SimpleTaskDecomposition(self.feat_channels,
-                                                  self.stacked_convs,
+                                                  num_layers,
+                                                  self.enable_sa,
                                                   self.conv_cfg, self.norm_cfg)
+        self.relu = nn.ReLU()
         self.tood_cls = nn.Conv2d(
             self.feat_channels,
             self.num_base_priors * self.cls_out_channels,
@@ -273,6 +279,8 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
         """
         # task decomposition
         inter_feats = []
+        if self.use_fpn_feature:
+            inter_feats.append(self.relu(x))
         for inter_conv in self.inter_convs:
             x = inter_conv(x)
             inter_feats.append(x)
@@ -419,57 +427,12 @@ class QualityOrientedRPNHeadATSS(OrientedAnchorFreeHead):
                 pos_decode_bbox_targets,
                 weight=centerness_targets,
                 avg_factor=1.0)
-
-            # build IoU-aware cls_score targets
-            if self.initial_loss and self.epoch < self.initial_epoch:
-                self.cls_loss_func = self.loss_cls
-                targets = labels
-            else:
-                if self.loss_cls_metric == 'FL':
-                    self.cls_loss_func = self.loss_cls
-                    targets = labels
-                elif self.loss_cls_metric == 'VFL':
-                    self.cls_loss_func = self.loss_cls_vfl
-                    iou_targets_ini = rbbox_overlaps(
-                        pos_decode_bbox_pred.detach(),
-                        pos_decode_bbox_targets.detach(),
-                        is_aligned=True).clamp(min=1e-6).view(-1)
-                    pos_labels = labels[pos_inds]
-                    pos_ious = iou_targets_ini.clone().detach()
-                    targets = torch.zeros_like(cls_score)
-                    targets[pos_inds, pos_labels] = pos_ious
-                elif self.loss_cls_metric == 'QFL':
-                    self.cls_loss_func = self.loss_cls_qfl
-                    iou_targets_ini = rbbox_overlaps(
-                        pos_decode_bbox_pred.detach(),
-                        pos_decode_bbox_targets.detach(),
-                        is_aligned=True).clamp(min=1e-6).view(-1)
-
-                    pos_labels = labels[pos_inds]
-                    pos_ious = iou_targets_ini.clone().detach()
-                    score = cls_score.new_zeros(labels.shape)
-                    score[pos_inds] = pos_ious
-                    targets = (labels, score)
         else:
             loss_bbox = bbox_pred.sum() * 0
             centerness_targets = bbox_targets.new_tensor(0.)
-            if self.initial_loss and self.epoch < self.initial_epoch:
-                self.cls_loss_func = self.loss_cls
-                targets = labels
-            else:
-                if self.loss_cls_metric == 'FL':
-                    self.cls_loss_func = self.loss_cls
-                    targets = labels
-                elif self.loss_cls_metric == 'VFL':
-                    self.cls_loss_func = self.loss_cls_vfl
-                    targets = torch.zeros_like(cls_score)
-                elif self.loss_cls_metric == 'QFL':
-                    self.cls_loss_func = self.loss_cls_qfl
-                    score = cls_score.new_zeros(labels.shape)
-                    targets = (labels, score)
 
-        loss_cls = self.cls_loss_func(
-            cls_score, targets, avg_factor=num_total_samples)
+        loss_cls = self.loss_cls(
+            cls_score, labels, avg_factor=num_total_samples)
 
         return loss_cls, loss_bbox, centerness_targets.sum()
 
