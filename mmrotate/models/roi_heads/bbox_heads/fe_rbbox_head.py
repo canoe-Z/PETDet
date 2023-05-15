@@ -10,17 +10,18 @@ from ...builder import ROTATED_HEADS
 from .rotated_bbox_head import RotatedBBoxHead
 
 from mmrotate.core.bbox import rbbox_overlaps
+from mmcv.cnn import ConvModule
 
 
 @ROTATED_HEADS.register_module()
 class FineGrainedEnhancedHead(RotatedBBoxHead):
     def __init__(self,
                  num_shared_convs=0,
-                 num_shared_fcs=1,
+                 num_shared_fcs=2,
                  num_cls_convs=0,
-                 num_cls_fcs=1,
+                 num_cls_fcs=0,
                  num_reg_convs=0,
-                 num_reg_fcs=1,
+                 num_reg_fcs=0,
                  conv_out_channels=256,
                  fc_out_channels=1024,
                  beta=2.0,
@@ -49,7 +50,6 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
         self.fc_out_channels = fc_out_channels
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
-
         self.beta = beta
 
         # add shared convs and fcs
@@ -75,6 +75,7 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
             if self.num_reg_fcs == 0:
                 self.reg_last_dim *= self.roi_feat_area
 
+        self.relu = nn.ReLU(inplace=True)
         # reconstruct fc_cls and fc_reg since input channels are changed
         if self.with_cls:
             if self.custom_cls_channels:
@@ -100,19 +101,10 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
                     layer='Linear',
                     override=[
                         dict(name='shared_fcs'),
-                        dict(name='cls_fcs2'),
-                        # dict(type='Constant', name='cls_fcs', val=0, bias=1),
+                        dict(name='cls_fcs'),
                         dict(name='reg_fcs')
                     ])
             ]
-            self.init_cfg += [
-                dict(
-                    type='Normal', std=0.001, override=dict(name='cls_fcs'))
-            ]
-        self.norm = nn.BatchNorm2d(num_features=self.in_channels)
-        self.norm2 = nn.BatchNorm1d(num_features=self.fc_out_channels)
-        self.gelu = nn.GELU()
-        self.cls_fcs2 = nn.Linear(self.cls_last_dim, self.fc_out_channels)
 
     def _add_conv_fc_branch(self,
                             num_branch_convs,
@@ -157,19 +149,14 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
 
     def forward(self, x):
         """Forward function."""
-        x = self.norm(x)
         if self.num_shared_convs > 0:
             for conv in self.shared_convs:
                 x = conv(x)
 
         if self.num_shared_fcs > 0:
-            if self.with_avg_pool:
-                x = self.avg_pool(x)
-
             x = x.flatten(1)
-
             for fc in self.shared_fcs:
-                x = self.gelu(fc(x))
+                x = self.relu(fc(x))
 
         # separate branches
         x_cls = x
@@ -178,22 +165,16 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
         for conv in self.cls_convs:
             x_cls = conv(x_cls)
         if x_cls.dim() > 2:
-            if self.with_avg_pool:
-                x_cls = self.avg_pool(x_cls)
             x_cls = x_cls.flatten(1)
         for fc in self.cls_fcs:
-            x_cls = x_cls + self.gelu(fc(x_cls)) * x_cls
-            x_cls = self.norm2(x_cls)
-        x_cls = self.gelu(self.cls_fcs2(x_cls))
+            x_cls = self.relu(fc(x_cls))
 
         for conv in self.reg_convs:
             x_reg = conv(x_reg)
         if x_reg.dim() > 2:
-            if self.with_avg_pool:
-                x_reg = self.avg_pool(x_reg)
             x_reg = x_reg.flatten(1)
         for fc in self.reg_fcs:
-            x_reg = self.gelu(fc(x_reg))
+            x_reg = self.relu(fc(x_reg))
 
         cls_score = self.fc_cls(x_cls) if self.with_cls else None
         bbox_pred = self.fc_reg(x_reg) if self.with_reg else None
@@ -335,8 +316,6 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
                 losses_bbox = bbox_pred[pos_inds].sum()
 
             # loss_cls
-
-            # neg_inds = labels == bg_class_ind
             weight = torch.ones_like(labels).float()
             if pos_inds.any():
                 pos_decode_bbox_pred = self.bbox_coder.decode(
@@ -347,7 +326,6 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
                     pos_decode_bbox_pred.detach(),
                     pos_decode_bbox_target.detach(),
                     is_aligned=True).clamp(min=1e-6).view(-1)
-
                 pos_ious = iou_targets_ini.clone().detach()
 
                 def normalize(x):

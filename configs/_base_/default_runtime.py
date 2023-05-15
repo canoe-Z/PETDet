@@ -22,5 +22,3 @@ mp_start_method = 'fork'
 #       or not by default.
 #   - `base_batch_size` = (8 GPUs) x (2 samples per GPU).
 auto_scale_lr = dict(enable=True, base_batch_size=8)
-# default enable fp16
-fp16 = dict(loss_scale='dynamic')
