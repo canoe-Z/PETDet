@@ -26,11 +26,12 @@ model = dict(
     rpn_head=dict(
         type='QualityOrientedRPNHeadATSS',
         in_channels=256,
-        stacked_convs=4,
+        stacked_convs=2,
         feat_channels=256,
         strides=[8, 16, 32, 64, 128],
         scale_angle=False,
-        loss_cls_metric='FL',
+        use_fpn_feature=True,
+        enable_sa=True,
         loss_cls=dict(
             type='FocalLoss',
             use_sigmoid=True,
@@ -141,11 +142,10 @@ lr_config = dict(
     warmup_iters=2000,
     warmup_ratio=1.0 / 2000,
     step=[8, 11])
-fp16 = dict(loss_scale='dynamic')
 
 optimizer = dict(lr=0.02)
-
-checkpoint_config = dict(interval=1)
+# fp16 = dict(loss_scale='dynamic')
+evaluation = dict(interval=12, metric='mAP')
 # lr_config = dict(
 #     policy='step',
 #     warmup='linear',

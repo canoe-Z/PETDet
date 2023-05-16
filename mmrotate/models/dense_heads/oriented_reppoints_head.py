@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import math
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,6 +10,7 @@ from mmdet.core import images_to_levels, multi_apply, unmap
 from mmdet.core.anchor.point_generator import MlvlPointGenerator
 from mmdet.core.utils import select_single_mlvl
 from mmdet.models.dense_heads.base_dense_head import BaseDenseHead
+from mmdet.models.dense_heads.dense_test_mixins import BBoxTestMixin
 
 from mmrotate.core import (build_assigner, build_sampler,
                            multiclass_nms_rotated, obb2poly, poly2obb)
@@ -46,7 +46,7 @@ def ChamferDistance2D(point_set_1,
 
 
 @ROTATED_HEADS.register_module()
-class OrientedRepPointsHead(BaseDenseHead):
+class OrientedRepPointsHead(BaseDenseHead, BBoxTestMixin):
     """Oriented RepPoints head -<https://arxiv.org/pdf/2105.11111v4.pdf>. The
     head contains initial and refined stages based on RepPoints. The initial
     stage regresses coarse point sets, and the refine stage further regresses
