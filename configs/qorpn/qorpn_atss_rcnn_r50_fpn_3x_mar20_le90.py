@@ -21,11 +21,12 @@ model = dict(
         in_channels=[256, 512, 1024, 2048],
         out_channels=256,
         start_level=1,
+        #add_extra_convs='on_input',
         num_outs=4),
     rpn_head=dict(
         type='QualityOrientedRPNHeadATSS',
         in_channels=256,
-        stacked_convs=4,
+        stacked_convs=2,
         feat_channels=256,
         strides=[8, 16, 32, 64],
         prior_generator=dict(
@@ -36,7 +37,8 @@ model = dict(
             ratios=[1.0],
             strides=[8, 16, 32, 64]),
         scale_angle=False,
-        loss_cls_metric='FL',
+        use_fpn_feature=True,
+        enable_sa=True,
         loss_cls=dict(
             type='FocalLoss',
             use_sigmoid=True,
@@ -147,26 +149,6 @@ lr_config = dict(
     warmup_iters=2000,
     warmup_ratio=1.0 / 2000,
     step=[24, 33])
-fp16 = dict(loss_scale='dynamic')
 
 optimizer = dict(lr=0.02)
-
-# lr_config = dict(
-#     policy='step',
-#     warmup='linear',
-#     warmup_iters=1000,
-#     warmup_ratio=1.0 / 3,
-#     step=[24, 33])
-
-# optimizer = dict(
-#     _delete_=True,
-#     type='AdamW',
-#     lr=0.0001,
-#     betas=(0.9, 0.999),
-#     weight_decay=0.05,
-#     paramwise_cfg=dict(
-#         custom_keys={
-#             'absolute_pos_embed': dict(decay_mult=0.),
-#             'relative_position_bias_table': dict(decay_mult=0.),
-#             'norm': dict(decay_mult=0.)
-#         }))
+evaluation = dict(interval=36, metric='mAP')

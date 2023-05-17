@@ -1,4 +1,4 @@
-_base_ = ['./qorpn_atss_rcnn_r50_fpn_3x_mar20_le90.py']
+_base_ = ['./qorpn_atss_rcnn_r50_fpn_3x_shiprs3_le90.py']
 
 model = dict(
     type='OrientedRCNNLFF',
