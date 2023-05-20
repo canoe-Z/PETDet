@@ -11,7 +11,6 @@ from .oriented_cascade_roi_head import OrientedCascadeRoIHead
 from .oriented_dynamic_roi_head import OrientedDynamicRoIHead
 from .oriented_refine_roi_head import OrientedRefineRoIHead
 from .oriented_decouple_roi_head import OrientedDecoupleHeadRoIHead
-from .lff_decouple_roi_head import LFFDecoupleHeadRoIHead
 
 __all__ = [
     'RotatedBBoxHead', 'RotatedConvFCBBoxHead', 'RotatedShared2FCBBoxHead',
