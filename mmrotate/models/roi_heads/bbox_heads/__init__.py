@@ -6,9 +6,10 @@ from .convfc_rbbox_head import (RotatedConvFCBBoxHead,
 from .double_rbbox_head import RotatedDoubleConvFCBBoxHead
 from .gv_bbox_head import GVBBoxHead
 from .rotated_bbox_head import RotatedBBoxHead
-from .decouple_rbbox_head import RotatedDecoupleBBoxHead
-from .fe_rbbox_head import FineGrainedEnhancedHead, FineGrainedEnhancedHeadRotatedShared2FCBBoxHead
+from .convfc_rbbox_arl_head import RotatedShared2FCBBoxARLHead, RotatedShared4Conv1FCBBoxARLHead
+
 __all__ = [
-    'RotatedBBoxHead', 'RotatedConvFCBBoxHead', 'RotatedShared2FCBBoxHead','RotatedShared4Conv1FCBBoxHead',
-    'GVBBoxHead', 'RotatedKFIoUShared2FCBBoxHead','RotatedDoubleConvFCBBoxHead'
+    'RotatedBBoxHead', 'RotatedConvFCBBoxHead', 'RotatedShared2FCBBoxHead', 'RotatedShared4Conv1FCBBoxHead',
+    'GVBBoxHead', 'RotatedKFIoUShared2FCBBoxHead', 'RotatedDoubleConvFCBBoxHead', 'RotatedShared2FCBBoxARLHead',
+    'RotatedShared4Conv1FCBBoxARLHead'
 ]

@@ -14,13 +14,11 @@ from .single_stage import RotatedSingleStageDetector
 from .two_stage import RotatedTwoStageDetector
 from .rotated_fcos import RotatedFCOS
 from .rotated_rpn import RotatedRPN
-from .ca_two_stage import CARPNRotatedTwoStageDetector
-from .lfcp import OrientedRCNNLFCP
-from .lff import OrientedRCNNLFF
+from .petdet import PETDet
 
 __all__ = [
     'RotatedRetinaNet', 'RotatedFasterRCNN', 'OrientedRCNN', 'RoITransformer',
     'GlidingVertex', 'ReDet', 'R3Det', 'S2ANet', 'RotatedRepPoints',
     'RotatedBaseDetector', 'RotatedTwoStageDetector',
-    'RotatedSingleStageDetector', 'RotatedFCOS', 'RotatedRPN'
+    'RotatedSingleStageDetector', 'RotatedFCOS', 'RotatedRPN', 'PETDet'
 ]

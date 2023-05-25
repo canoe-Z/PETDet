@@ -2,27 +2,28 @@ import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mmcv.cnn import ConvModule, Scale, bias_init_with_prob, normal_init, constant_init
+from mmcv.cnn import ConvModule, Scale, bias_init_with_prob, normal_init
 from mmcv.ops import batched_nms
-from mmdet.core.utils import select_single_mlvl
 from mmcv.runner import force_fp32
-from mmdet.core import multi_apply, reduce_mean
-from mmdet.models.dense_heads.tood_head import TaskDecomposition
+from mmdet.core import images_to_levels, multi_apply, reduce_mean, unmap
+from mmdet.core.utils import select_single_mlvl
 
-from mmrotate.core import obb2xyxy
-from mmrotate.core.bbox import rbbox_overlaps
-from ..builder import ROTATED_HEADS, build_loss
+from mmrotate.core import (build_assigner, build_prior_generator,
+                           build_sampler, obb2xyxy,
+                           rotated_anchor_inside_flags)
 from .oriented_anchor_free_head import OrientedAnchorFreeHead
-from ..detectors.utils import AlignConv, SharedAlignConv
+from .utils import get_num_level_anchors_inside
+from ..builder import ROTATED_HEADS
+
 INF = 1e8
 
 
-class SimpleTaskDecomposition(nn.Module):
-    """Task decomposition module in task-aligned predictor of TOOD.
+class DecoupledAttentionModule(nn.Module):
+    """Layer and spatial attention in QOPN.
 
     Args:
-        feat_channels (int): Number of feature channels in TOOD head.
-        stacked_convs (int): Number of conv layers in TOOD head.
+        feat_channels (int): Number of feature channels in qopn head.
+        stacked_convs (int): Number of conv layers in qopn head.
         la_down_rate (int): Downsample rate of layer attention.
         conv_cfg (dict): Config dict for convolution layer.
         norm_cfg (dict): Config dict for normalization layer.
@@ -31,11 +32,13 @@ class SimpleTaskDecomposition(nn.Module):
     def __init__(self,
                  feat_channels,
                  stacked_convs,
+                 enable_sa=False,
                  conv_cfg=None,
                  norm_cfg=None):
-        super(SimpleTaskDecomposition, self).__init__()
+        super(DecoupledAttentionModule, self).__init__()
         self.feat_channels = feat_channels
         self.stacked_convs = stacked_convs
+        self.enable_sa = enable_sa
         self.in_channels = self.feat_channels * self.stacked_convs
         self.norm_cfg = norm_cfg
         self.layer_attention = nn.Conv2d(
@@ -55,10 +58,19 @@ class SimpleTaskDecomposition(nn.Module):
             norm_cfg=norm_cfg,
             bias=norm_cfg is None)
 
+        if self.enable_sa:
+            self.spatial_attention = nn.Conv2d(
+                1, 1, 3, stride=1, padding=1)
+            self.sigmoid = nn.Sigmoid()
+
     def init_weights(self):
         for m in self.layer_attention.modules():
             if isinstance(m, nn.Conv2d):
                 normal_init(m, std=0.001)
+        if self.enable_sa:
+            for m in self.spatial_attention.modules():
+                if isinstance(m, nn.Conv2d):
+                    normal_init(m, std=0.001)
         normal_init(self.reduction_conv.conv, std=0.01)
 
     def forward(self, feat, avg_feat=None):
@@ -83,102 +95,43 @@ class SimpleTaskDecomposition(nn.Module):
             feat = self.reduction_conv.norm(feat)
         feat = self.reduction_conv.activate(feat)
 
+        if self.enable_sa:
+            spatial_weight = torch.mean(feat, dim=1, keepdim=True)
+            feat = feat * self.sigmoid(self.spatial_attention(spatial_weight))
+
         return feat
 
 
 @ROTATED_HEADS.register_module()
 class QualityOrientedRPNHead(OrientedAnchorFreeHead):
-    """Anchor-free head used in `FCOS <https://arxiv.org/abs/1904.01355>`_.
-    The FCOS head does not use anchor boxes. Instead bounding boxes are
-    predicted at each pixel and a centerness measure is used to suppress
-    low-quality predictions.
-    Here norm_on_bbox, centerness_on_reg, dcn_on_last_conv are training
-    tricks used in official repo, which will bring remarkable mAP gains
-    of up to 4.9. Please see https://github.com/tianzhi0549/FCOS for
-    more detail.
-    Args:
-        num_classes (int): Number of categories excluding the background
-            category.
-        in_channels (int): Number of channels in the input feature map.
-        strides (list[int] | list[tuple[int, int]]): Strides of points
-            in multiple feature levels. Default: (4, 8, 16, 32, 64).
-        regress_ranges (tuple[tuple[int, int]]): Regress range of multiple
-            level points.
-        center_sampling (bool): If true, use center sampling. Default: False.
-        center_sample_radius (float): Radius of center sampling. Default: 1.5.
-        norm_on_bbox (bool): If true, normalize the regression targets
-            with FPN strides. Default: False.
-        centerness_on_reg (bool): If true, position centerness on the
-            regress branch. Please refer to https://github.com/tianzhi0549/FCOS/issues/89#issuecomment-516877042.
-            Default: False.
-        conv_bias (bool | str): If specified as `auto`, it will be decided by the
-            norm_cfg. Bias of conv will be set as True if `norm_cfg` is None, otherwise
-            False. Default: "auto".
-        loss_cls (dict): Config of classification loss.
-        loss_bbox (dict): Config of localization loss.
-        loss_centerness (dict): Config of centerness loss.
-        norm_cfg (dict): dictionary to construct and config norm layer.
-            Default: norm_cfg=dict(type='GN', num_groups=32, requires_grad=True).
-        init_cfg (dict or list[dict], optional): Initialization config dict.
-    Example:
-        >>> self = FCOSHead(11, 7)
-        >>> feats = [torch.rand(1, 7, s, s) for s in [4, 8, 16, 32, 64]]
-        >>> cls_score, bbox_pred, centerness = self.forward(feats)
-        >>> assert len(cls_score) == len(self.scales)
-    """  # noqa: E501
-
     def __init__(self,
                  in_channels,
-                 num_dcn=0,
                  start_level=0,
-                 regress_ranges=((-1, 64), (64, 128), (128, 256), (256, 512),
-                                 (512, INF)),
                  angle_version='le90',
-                 center_sampling=False,
-                 center_sample_radius=1.5,
-                 shrink_sampling=False,
-                 shrink_sigma=[0, 0.15, 0.3, 0.45, 0.6],
+                 prior_generator=dict(
+                     type='RotatedAnchorGenerator',
+                     octave_base_scale=8,
+                     scales_per_octave=1,
+                     center_offset=0.0,
+                     ratios=[1.0],
+                     strides=[8, 16, 32, 64, 128]),
                  scale_angle=False,
+                 use_fpn_feature=False,
+                 enable_sa=True,
                  loss_cls=dict(
                      type='FocalLoss',
                      use_sigmoid=True,
                      gamma=2.0,
                      alpha=0.25,
                      loss_weight=0.5),
-                 use_vfl=True,
-                 loss_cls_vfl=dict(
-                     type='VarifocalLoss',
-                     use_sigmoid=True,
-                     alpha=0.75,
-                     gamma=2.0,
-                     iou_weighted=True,
-                     loss_weight=0.25),
-                 loss_target_scale=False,
-                 use_aux_loss_cls=False,
-                 aux_loss_poch=4,
-                 loss_cls_aux=dict(
-                     type='FocalLoss',
-                     use_sigmoid=True,
-                     gamma=2.0,
-                     alpha=0.25,
-                     loss_weight=0.25),
-                 refine_bbox=True,
                  loss_bbox=dict(type='RotatedIoULoss', loss_weight=0.5),
-                 loss_bbox_refine=dict(type='RotatedIoULoss', loss_weight=0.5),
                  norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
                  **kwargs):
-        self.num_dcn = num_dcn
-        self.regress_ranges = regress_ranges
-        self.center_sampling = center_sampling
-        self.center_sample_radius = center_sample_radius
-        self.shrink_sampling = shrink_sampling
-        self.shrink_sigma = shrink_sigma
         self.start_level = start_level
         self.scale_angle = scale_angle
+        self.enable_sa = enable_sa
         self.angle_version = angle_version
-        self.refine_bbox = refine_bbox
-        self.epoch = 0  # which would be update in SetEpochInfoHook!
-        self.aux_loss_epoch = aux_loss_poch
+        self.use_fpn_feature = use_fpn_feature
 
         super(QualityOrientedRPNHead, self).__init__(
             num_classes=1,
@@ -188,24 +141,21 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
             norm_cfg=norm_cfg,
             **kwargs)
 
-        self.use_vfl = use_vfl
-        self.use_aux_loss_cls = use_aux_loss_cls
-        self.loss_target_scale = loss_target_scale
-        if self.use_vfl:
-            self.loss_cls = build_loss(loss_cls_vfl)
-            if self.use_aux_loss_cls:
-                self.loss_cls_aux = build_loss(loss_cls_aux)
-        if self.refine_bbox:
-            self.loss_bbox_refine = build_loss(loss_bbox_refine)
+        self.prior_generator = prior_generator
+        self.prior_generator = build_prior_generator(prior_generator)
+        # usually the numbers of anchors for each level are the same
+        # except SSD detectors
+        self.num_anchors = self.prior_generator.num_base_anchors[0]
+        assert self.num_anchors == 1
+        if self.train_cfg:
+            self.assigner = build_assigner(self.train_cfg.assigner)
+            sampler_cfg = dict(type='PseudoSampler')
+            self.sampler = build_sampler(sampler_cfg, context=self)
 
     def _init_layers(self):
         """Initialize layers of the head."""
         self.inter_convs = nn.ModuleList()
         for i in range(self.stacked_convs):
-            if i < self.num_dcn:
-                conv_cfg = dict(type='DCNv2', deform_groups=4)
-            else:
-                conv_cfg = self.conv_cfg
             chn = self.in_channels if i == 0 else self.feat_channels
             self.inter_convs.append(
                 ConvModule(
@@ -214,52 +164,33 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                     3,
                     stride=1,
                     padding=1,
-                    conv_cfg=conv_cfg,
+                    conv_cfg=self.conv_cfg,
                     norm_cfg=self.norm_cfg))
 
-        self.cls_decomp = SimpleTaskDecomposition(self.feat_channels,
-                                                  self.stacked_convs,
+        if self.use_fpn_feature:
+            num_layers = self.stacked_convs + 1
+        else:
+            num_layers = self.stacked_convs
+        self.cls_decomp = DecoupledAttentionModule(self.feat_channels,
+                                                  num_layers,
+                                                  self.enable_sa,
                                                   self.conv_cfg, self.norm_cfg)
-        self.reg_decomp = SimpleTaskDecomposition(self.feat_channels,
-                                                  self.stacked_convs,
+        self.reg_decomp = DecoupledAttentionModule(self.feat_channels,
+                                                  num_layers,
+                                                  self.enable_sa,
                                                   self.conv_cfg, self.norm_cfg)
-
-        self.tood_cls = nn.Conv2d(
+        self.relu = nn.ReLU()
+        self.qopn_cls = nn.Conv2d(
             self.feat_channels,
             self.num_base_priors * self.cls_out_channels,
             3,
             padding=1)
-        self.tood_reg = nn.Conv2d(
+        self.qopn_reg = nn.Conv2d(
             self.feat_channels, self.num_base_priors * 4, 3, padding=1)
-        self.tood_angle = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
+        self.qopn_angle = nn.Conv2d(self.feat_channels, 1, 3, padding=1)
         self.scales = nn.ModuleList([Scale(1.0) for _ in self.strides])
         if self.scale_angle:
             self.scale_angle = Scale(1.0)
-
-        # refine
-        self.idxs = range(len(self.strides))
-        if self.refine_bbox:
-            self.alignconv = SharedAlignConv(
-                self.in_channels, self.in_channels, kernel_size=3)
-            # self.acs = nn.ModuleList([
-            #     AlignConv(
-            #         self.in_channels,
-            #         self.in_channels,
-            #         kernel_size=3,
-            #         stride=s) for s in self.strides
-            # ])
-            self.tood_refine_reg = nn.Conv2d(
-                self.feat_channels, self.num_base_priors * 4, 3, padding=1)
-            self.tood_refine_angle = nn.Conv2d(
-                self.feat_channels, 1, 3, padding=1)
-            self.refine_scales = nn.ModuleList(
-                [Scale(1.0) for _ in self.strides])
-            if self.scale_angle:
-                self.refine_scale_angle = Scale(1.0)
-        else:
-            self.alignconv = None
-            # self.acs = [None for _ in self.strides]
-            self.refine_scales = [None for _ in self.strides]
 
     def init_weights(self):
         """Initialize weights of the head."""
@@ -270,14 +201,9 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         self.cls_decomp.init_weights()
         self.reg_decomp.init_weights()
 
-        normal_init(self.tood_cls, std=0.01, bias=bias_cls)
-        normal_init(self.tood_reg, std=0.01)
-        normal_init(self.tood_angle, std=0.01)
-
-        if self.refine_bbox:
-            self.alignconv.init_weights()
-            normal_init(self.tood_refine_reg, std=0.01)
-            normal_init(self.tood_refine_angle, std=0.01)
+        normal_init(self.qopn_cls, std=0.01, bias=bias_cls)
+        normal_init(self.qopn_reg, std=0.01)
+        normal_init(self.qopn_angle, std=0.01)
 
     def forward(self, feats):
         """Forward features from the upstream network.
@@ -295,10 +221,9 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                 centernesses (list[Tensor]): centerness for each scale level, \
                     each is a 4D-tensor, the channel number is num_points * 1.
         """
-        return multi_apply(self.forward_single, feats[self.start_level:], self.scales, self.refine_scales, self.idxs,
-                           self.strides)
+        return multi_apply(self.forward_single, feats[self.start_level:], self.scales, self.strides)
 
-    def forward_single(self, x, scale, refine_scale, idx, stride):
+    def forward_single(self, x, scale, stride):
         """Forward features of a single scale level.
 
         Args:
@@ -313,52 +238,31 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                 predictions of input feature maps.
         """
         inter_feats = []
+        if self.use_fpn_feature:
+            inter_feats.append(self.relu(x))
         for inter_conv in self.inter_convs:
             x = inter_conv(x)
             inter_feats.append(x)
-        feat = torch.cat(inter_feats, 1)
+            feat = torch.cat(inter_feats, 1)
 
-        # task decomposition
         avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
         cls_feat = self.cls_decomp(feat, avg_feat)
         reg_feat = self.reg_decomp(feat, avg_feat)
 
         # prediction
-        cls_score = self.tood_cls(cls_feat)
-        bbox_pred = scale(self.tood_reg(reg_feat).exp()).float() * stride
-        angle_pred = self.tood_angle(reg_feat)
+        cls_score = self.qopn_cls(cls_feat)
+        bbox_pred = scale(self.qopn_reg(reg_feat).exp()).float() * stride
+        angle_pred = self.qopn_angle(reg_feat)
         if self.scale_angle:
             angle_pred = self.scale_angle(angle_pred).float()
         bbox_pred = torch.cat([bbox_pred, angle_pred], dim=1)
 
-        # refine
-        if self.refine_bbox:
-            b, _, h, w = x.shape
-            point = self.prior_generator.single_level_grid_priors(
-                (h, w), idx, device=x.device)
-            point = torch.cat([point for _ in range(b)])
-            reg_dist = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
-            bbox_pred_decoded = self.bbox_coder.decode(point, reg_dist)
-            ac_feat = self.alignconv(reg_feat, bbox_pred_decoded, stride)
-            bbox_pred_delta = refine_scale(
-                self.tood_refine_reg(ac_feat).exp()).float() * stride
-            angle_pred_delta = self.tood_refine_angle(ac_feat)
-            if self.scale_angle:
-                angle_pred_delta = self.refine_scale_angle(
-                    angle_pred_delta).float()
-            bbox_pred_delta = torch.cat(
-                [bbox_pred_delta, angle_pred_delta], dim=1)
-            bbox_pred_refine = bbox_pred.detach() + bbox_pred_delta
+        return cls_score, bbox_pred
 
-            return cls_score, bbox_pred, bbox_pred_refine
-        else:
-            return cls_score, bbox_pred, bbox_pred
-
-    @ force_fp32(apply_to=('cls_scores', 'bbox_preds', 'bbox_preds_refine'))
+    @ force_fp32(apply_to=('cls_scores', 'bbox_preds'))
     def loss(self,
              cls_scores,
              bbox_preds,
-             bbox_preds_refine,
              gt_bboxes,
              img_metas,
              gt_bboxes_ignore=None):
@@ -382,316 +286,316 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
-        assert len(cls_scores) == len(bbox_preds)
-        gt_labels = None
         featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
-        all_level_points = self.prior_generator.grid_priors(
-            featmap_sizes,
-            dtype=bbox_preds[0].dtype,
-            device=bbox_preds[0].device)
-        labels, bbox_targets = self.get_targets(all_level_points, gt_bboxes,
-                                                gt_labels)
+        assert len(cls_scores) == len(bbox_preds)
 
-        num_imgs = cls_scores[0].size(0)
-        # flatten cls_scores, bbox_preds and centerness
-        flatten_cls_scores = [
-            cls_score.permute(0, 2, 3, 1).reshape(-1, self.cls_out_channels)
-            for cls_score in cls_scores
-        ]
-        flatten_bbox_preds = [
-            bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
-            for bbox_pred in bbox_preds
-        ]
-        flatten_bbox_preds_refine = [
-            bbox_pred_refine.permute(0, 2, 3, 1).reshape(-1, 5)
-            for bbox_pred_refine in bbox_preds_refine
-        ]
-        flatten_cls_scores = torch.cat(flatten_cls_scores)
-        flatten_bbox_preds = torch.cat(flatten_bbox_preds)
-        flatten_bbox_preds_refine = torch.cat(flatten_bbox_preds_refine)
-        flatten_labels = torch.cat(labels)
-        flatten_bbox_targets = torch.cat(bbox_targets)
-        # repeat points to align with bbox_preds
-        flatten_points = torch.cat(
-            [points.repeat(num_imgs, 1) for points in all_level_points])
+        gt_labels = None
+        device = cls_scores[0].device
+        anchor_list, valid_flag_list = self.get_anchors(
+            featmap_sizes, img_metas, device=device)
+        label_channels = self.cls_out_channels if self.use_sigmoid_cls else 1
+
+        cls_reg_targets = self.get_targets(
+            anchor_list,
+            valid_flag_list,
+            gt_bboxes,
+            img_metas,
+            gt_bboxes_ignore_list=gt_bboxes_ignore,
+            gt_labels_list=gt_labels,
+            label_channels=label_channels)
+        (labels_list, label_weights_list,
+         bbox_targets_list, num_total_pos) = cls_reg_targets
+
+        num_total_samples = num_total_pos
+
+        # anchor number of multi levels
+        num_level_anchors = [anchors.size(0) for anchors in anchor_list[0]]
+        # concat all level anchors and flags to a single tensor
+        concat_anchor_list = []
+        for i, _ in enumerate(anchor_list):
+            concat_anchor_list.append(torch.cat(anchor_list[i]))
+        all_anchor_list = images_to_levels(concat_anchor_list,
+                                           num_level_anchors)
+
+        losses_cls, losses_bbox, bbox_avg_factor = multi_apply(
+            self.loss_single,
+            cls_scores,
+            bbox_preds,
+            all_anchor_list,
+            labels_list,
+            bbox_targets_list,
+            num_total_samples=num_total_samples)
+
+        bbox_avg_factor = sum(bbox_avg_factor)
+        bbox_avg_factor = reduce_mean(bbox_avg_factor).clamp_(min=1).item()
+        losses_bbox = list(map(lambda x: x / bbox_avg_factor, losses_bbox))
+        return dict(
+            loss_rpn_cls=losses_cls,
+            loss_rpn_bbox=losses_bbox)
+
+    def loss_single(self, cls_score, bbox_pred, anchors, labels,
+                    bbox_targets, num_total_samples):
+        """Compute loss of a single scale level.
+
+        Args:
+            anchors (Tensor): Box reference for each scale level with shape
+                (N, num_total_anchors, 4).
+            cls_score (Tensor): Box scores for each scale level
+                Has shape (N, num_anchors * num_classes, H, W).
+            bbox_pred (Tensor): Decoded bboxes for each scale
+                level with shape (N, num_anchors * 4, H, W).
+            labels (Tensor): Labels of each anchors with shape
+                (N, num_total_anchors).
+            label_weights (Tensor): Label weights of each anchor with shape
+                (N, num_total_anchors).
+            bbox_targets (Tensor): BBox regression targets of each anchor with
+                shape (N, num_total_anchors, 4).
+            alignment_metrics (Tensor): Alignment metrics with shape
+                (N, num_total_anchors).
+            stride (tuple[int]): Downsample stride of the feature map.
+
+        Returns:
+            dict[str, Tensor]: A dictionary of loss components.
+        """
+        cls_score = cls_score.permute(0, 2, 3, 1).reshape(
+            -1, self.cls_out_channels).contiguous()
+        anchors = anchors.reshape(-1, anchors.size(-1))
+        bbox_pred = bbox_pred.permute(0, 2, 3, 1).reshape(-1, 5)
+        bbox_targets = bbox_targets.reshape(-1, 5)
+        labels = labels.reshape(-1)
 
         # FG cat_id: [0, num_classes -1], BG cat_id: num_classes
         bg_class_ind = self.num_classes
-        pos_inds = ((flatten_labels >= 0)
-                    & (flatten_labels < bg_class_ind)).nonzero().reshape(-1)
-        num_pos = torch.tensor(
-            len(pos_inds), dtype=torch.float, device=bbox_preds[0].device)
-        num_pos = max(reduce_mean(num_pos), 1.0)
-
-        pos_bbox_preds = flatten_bbox_preds[pos_inds]
-        pos_bbox_preds_refine = flatten_bbox_preds_refine[pos_inds]
-        pos_bbox_targets = flatten_bbox_targets[pos_inds]
-        pos_centerness_targets = self.centerness_target(pos_bbox_targets)
-        # centerness weighted iou loss
-        centerness_denorm = max(
-            reduce_mean(pos_centerness_targets.sum().detach()), 1e-6)
+        pos_inds = ((labels >= 0)
+                    & (labels < bg_class_ind)).nonzero().squeeze(1)
 
         if len(pos_inds) > 0:
-            pos_points = flatten_points[pos_inds]
-            pos_decoded_bbox_preds = self.bbox_coder.decode(pos_points,
-                                                            pos_bbox_preds)
-            pos_decoded_target_preds = self.bbox_coder.decode(
-                pos_points, pos_bbox_targets)
+            pos_bbox_targets = bbox_targets[pos_inds]
+            pos_bbox_pred = bbox_pred[pos_inds]
+            pos_prior_points = self.anchor_center(anchors[pos_inds])
+            pos_decode_bbox_pred = self.bbox_coder.decode(pos_prior_points,
+                                                          pos_bbox_pred, edge_swap=True)
+            pos_decode_bbox_targets = self.bbox_coder.decode(
+                pos_prior_points, pos_bbox_targets, edge_swap=True)
+
+            # regression loss
+            centerness_targets = self.centerness_target(pos_bbox_targets)
+
             loss_bbox = self.loss_bbox(
-                pos_decoded_bbox_preds,
-                pos_decoded_target_preds,
-                weight=pos_centerness_targets,
-                avg_factor=centerness_denorm)
-
-            pos_decoded_bbox_preds_refine = self.bbox_coder.decode(pos_points,
-                                                                   pos_bbox_preds_refine)
-
-            if self.refine_bbox:
-                loss_bbox_refine = self.loss_bbox_refine(
-                    pos_decoded_bbox_preds_refine,
-                    pos_decoded_target_preds,
-                    weight=pos_centerness_targets,
-                    avg_factor=centerness_denorm)
-
-            # build IoU-aware cls_score targets
-            if self.use_vfl:
-                iou_targets_ini = rbbox_overlaps(
-                    pos_decoded_bbox_preds_refine.detach(),
-                    pos_decoded_target_preds.detach(),
-                    is_aligned=True).clamp(min=1e-6).view(-1)
-
-                pos_labels = flatten_labels[pos_inds]
-                pos_ious = iou_targets_ini.clone().detach()
-                if self.loss_target_scale:
-                    pos_ious_mean = pos_ious.mean()
-                    pos_ious = torch.pow(pos_ious, pos_ious_mean.pow(0.5))
-                    # print(pos_ious.mean())
-                cls_iou_targets = torch.zeros_like(flatten_cls_scores)
-                cls_iou_targets[pos_inds, pos_labels] = pos_ious
+                pos_decode_bbox_pred,
+                pos_decode_bbox_targets,
+                weight=centerness_targets,
+                avg_factor=1.0)
         else:
-            loss_bbox = pos_bbox_preds.sum()
-            loss_bbox_refine = pos_bbox_preds_refine.sum()
-            if self.use_vfl:
-                cls_iou_targets = torch.zeros_like(flatten_cls_scores)
+            loss_bbox = bbox_pred.sum() * 0
+            centerness_targets = bbox_targets.new_tensor(0.)
 
-        if self.use_vfl:
-            loss_cls = self.loss_cls(
-                flatten_cls_scores, cls_iou_targets, avg_factor=num_pos)
+        loss_cls = self.loss_cls(
+            cls_score, labels, avg_factor=num_total_samples)
 
-            if self.use_aux_loss_cls and self.epoch < self.aux_loss_epoch:
-                # pos_ious_mean = pos_ious.mean()
-                loss_cls_aux = self.loss_cls_aux(
-                    flatten_cls_scores, flatten_labels, avg_factor=num_pos)
-                loss_cls = loss_cls
-                # loss_cls_aux = loss_cls_aux*(1-pos_ious_mean)
-        else:
-            loss_cls = self.loss_cls(
-                flatten_cls_scores, flatten_labels, avg_factor=num_pos)
+        return loss_cls, loss_bbox, centerness_targets.sum()
 
-        if self.use_aux_loss_cls and self.epoch < self.aux_loss_epoch:
-            if self.refine_bbox:
-                return dict(
-                    loss_rpn_cls=loss_cls,
-                    loss_rpn_cls_aux=loss_cls_aux,
-                    loss_rpn_bbox=loss_bbox,
-                    loss_rpn_bbox_refine=loss_bbox_refine)
-            else:
-                return dict(
-                    loss_rpn_cls=loss_cls,
-                    loss_rpn_cls_aux=loss_cls_aux,
-                    loss_rpn_bbox=loss_bbox)
-        if self.refine_bbox:
-            return dict(
-                loss_rpn_cls=loss_cls,
-                loss_rpn_bbox=loss_bbox,
-                loss_rpn_bbox_refine=loss_bbox_refine)
-        else:
-            return dict(
-                loss_rpn_cls=loss_cls,
-                loss_rpn_bbox=loss_bbox)
-
-    def get_targets(self, points, gt_bboxes_list, gt_labels_list):
-        """Compute regression, classification and centerness targets for points
-        in multiple images.
+    def _get_targets_single(self,
+                            flat_anchors,
+                            valid_flags,
+                            num_level_anchors,
+                            gt_bboxes,
+                            gt_bboxes_ignore,
+                            gt_labels,
+                            img_meta,
+                            label_channels=1,
+                            unmap_outputs=True):
+        """Compute regression and classification targets for anchors in a
+        single image.
 
         Args:
-            points (list[Tensor]): Points of each fpn level, each has shape
-                (num_points, 2).
-            gt_bboxes_list (list[Tensor]): Ground truth bboxes of each image,
-                each has shape (num_gt, 4).
-            gt_labels_list (list[Tensor]): Ground truth labels of each box,
-                each has shape (num_gt,).
+            flat_anchors (torch.Tensor): Multi-level anchors of the image,
+                which are concatenated into a single tensor of shape \
+                (num_anchors, 5)
+            valid_flags (torch.Tensor): Multi level valid flags of the image,
+                which are concatenated into a single tensor of \
+                shape (num_anchors,).
+            num_level_anchors (torch.Tensor): Number of anchors of each \
+                scale level
+            gt_bboxes (torch.Tensor): Ground truth bboxes of the image,
+                shape (num_gts, 5).
+            img_meta (dict): Meta info of the image.
+            gt_bboxes_ignore (torch.Tensor): Ground truth bboxes to be \
+                ignored, shape (num_ignored_gts, 5).
+            img_meta (dict): Meta info of the image.
+            gt_labels (torch.Tensor): Ground truth labels of each box,
+                shape (num_gts,).
+            label_channels (int): Channel of label.
+            unmap_outputs (bool): Whether to map outputs back to the original \
+                set of anchors.
+
         Returns:
             tuple:
-                concat_lvl_labels (list[Tensor]): Labels of each level. \
-                concat_lvl_bbox_targets (list[Tensor]): BBox targets of each \
-                    level.
+                labels_list (list[Tensor]): Labels of all anchor
+                label_weights_list (list[Tensor]): Label weights of all anchor
+                bbox_targets_list (list[Tensor]): BBox targets of all anchor
+                pos_inds (int): Indices of positive anchor
+                neg_inds (int): Indices of negative anchor
+                sampling_result: object `SamplingResult`, sampling result.
         """
-        assert len(points) == len(self.regress_ranges)
-        num_levels = len(points)
-        # expand regress ranges to align with points
-        expanded_regress_ranges = [
-            points[i].new_tensor(self.regress_ranges[i])[None].expand_as(
-                points[i]) for i in range(num_levels)
-        ]
-        # concat all levels points and regress ranges
-        concat_regress_ranges = torch.cat(expanded_regress_ranges, dim=0)
-        concat_points = torch.cat(points, dim=0)
+        inside_flags = rotated_anchor_inside_flags(
+            flat_anchors, valid_flags, img_meta['img_shape'][:2],
+            self.train_cfg.allowed_border)
+        if not inside_flags.any():
+            return (None, ) * 7
+        # assign gt and sample anchors
+        anchors = flat_anchors[inside_flags, :]
 
-        # the number of points per img, per lvl
-        num_points = [center.size(0) for center in points]
+        num_level_anchors_inside = get_num_level_anchors_inside(
+            num_level_anchors, inside_flags)
+        assign_result = self.assigner.assign(
+            anchors, num_level_anchors_inside, gt_bboxes, gt_bboxes_ignore,
+            gt_labels)
 
-        if gt_labels_list is None:
-            gt_labels_list = [None for _ in range(len(gt_bboxes_list))]
+        sampling_result = self.sampler.sample(assign_result, anchors,
+                                              gt_bboxes)
 
-        # get labels and bbox_targets of each image
-        labels_list, bbox_targets_list = multi_apply(
-            self._get_target_single,
-            gt_bboxes_list,
-            gt_labels_list,
-            points=concat_points,
-            regress_ranges=concat_regress_ranges,
-            num_points_per_lvl=num_points)
+        num_valid_anchors = anchors.shape[0]
+        bbox_targets = torch.zeros_like(anchors)
+        labels = anchors.new_full((num_valid_anchors, ),
+                                  self.num_classes,
+                                  dtype=torch.long)
+        label_weights = anchors.new_zeros(num_valid_anchors, dtype=torch.float)
 
-        # split to per img, per level
-        labels_list = [labels.split(num_points, 0) for labels in labels_list]
-        bbox_targets_list = [
-            bbox_targets.split(num_points, 0)
-            for bbox_targets in bbox_targets_list
-        ]
+        pos_inds = sampling_result.pos_inds
+        neg_inds = sampling_result.neg_inds
+        if len(pos_inds) > 0:
+            # point-based
+            pos_bbox_targets = self.bbox_coder.encode(
+                self.anchor_center(sampling_result.pos_bboxes), sampling_result.pos_gt_bboxes)
+            bbox_targets[pos_inds, :] = pos_bbox_targets
 
-        # concat per level image
-        concat_lvl_labels = []
-        concat_lvl_bbox_targets = []
-        for i in range(num_levels):
-            concat_lvl_labels.append(
-                torch.cat([labels[i] for labels in labels_list]))
-            bbox_targets = torch.cat(
-                [bbox_targets[i] for bbox_targets in bbox_targets_list])
-            # if self.norm_on_bbox:
-            #     bbox_targets[:, :4] = bbox_targets[:, :4] / self.strides[i]
-            concat_lvl_bbox_targets.append(bbox_targets)
-        return concat_lvl_labels, concat_lvl_bbox_targets
+            if gt_labels is None:
+                # Only rpn gives gt_labels as None
+                # Foreground is the first class since v2.5.0
+                labels[pos_inds] = 0
+            else:
+                labels[pos_inds] = gt_labels[
+                    sampling_result.pos_assigned_gt_inds]
+            if self.train_cfg.pos_weight <= 0:
+                label_weights[pos_inds] = 1.0
+            else:
+                label_weights[pos_inds] = self.train_cfg.pos_weight
+        if len(neg_inds) > 0:
+            label_weights[neg_inds] = 1.0
 
-    def _get_target_single(self, gt_bboxes, gt_labels, points, regress_ranges,
-                           num_points_per_lvl):
-        """Compute regression and classification targets for a single image."""
-        num_points = points.size(0)
-        num_gts = gt_bboxes.size(0)
-        if num_gts == 0:
-            return gt_labels.new_full((num_points,), self.num_classes), \
-                gt_bboxes.new_zeros((num_points, 5))
+        # map up to original set of anchors
+        if unmap_outputs:
+            num_total_anchors = flat_anchors.size(0)
+            labels = unmap(
+                labels, num_total_anchors, inside_flags,
+                fill=self.num_classes)  # fill bg label
+            label_weights = unmap(label_weights, num_total_anchors,
+                                  inside_flags)
+            bbox_targets = unmap(bbox_targets, num_total_anchors, inside_flags)
 
-        areas = gt_bboxes[:, 2] * gt_bboxes[:, 3]
-        # TODO: figure out why these two are different
-        # areas = areas[None].expand(num_points, num_gts)
-        areas = areas[None].repeat(num_points, 1)
-        regress_ranges = regress_ranges[:, None, :].expand(
-            num_points, num_gts, 2)
-        points = points[:, None, :].expand(num_points, num_gts, 2)
-        gt_bboxes = gt_bboxes[None].expand(num_points, num_gts, 5)
-        gt_ctr, gt_wh, gt_angle = torch.split(gt_bboxes, [2, 2, 1], dim=2)
+        return (labels, label_weights, bbox_targets, pos_inds)
 
-        cos_angle, sin_angle = torch.cos(gt_angle), torch.sin(gt_angle)
-        rot_matrix = torch.cat([cos_angle, sin_angle, -sin_angle, cos_angle],
-                               dim=-1).reshape(num_points, num_gts, 2, 2)
-        offset = points - gt_ctr
-        offset = torch.matmul(rot_matrix, offset[..., None])
-        offset = offset.squeeze(-1)
-
-        w, h = gt_wh[..., 0], gt_wh[..., 1]
-        offset_x, offset_y = offset[..., 0], offset[..., 1]
-        left = w / 2 + offset_x
-        right = w / 2 - offset_x
-        top = h / 2 + offset_y
-        bottom = h / 2 - offset_y
-        bbox_targets = torch.stack((left, top, right, bottom), -1)
-
-        # condition1: inside a gt bbox
-        inside_gt_bbox_mask = bbox_targets.min(-1)[0] > 0
-        if self.center_sampling:
-            # condition1: inside a `center bbox`
-            radius = self.center_sample_radius
-            stride = offset.new_zeros(offset.shape)
-
-            # project the points on current lvl back to the `original` sizes
-            lvl_begin = 0
-            for lvl_idx, num_points_lvl in enumerate(num_points_per_lvl):
-                lvl_end = lvl_begin + num_points_lvl
-                stride[lvl_begin:lvl_end] = self.strides[lvl_idx] * radius
-                lvl_begin = lvl_end
-
-            inside_center_bbox_mask = (abs(offset) < stride).all(dim=-1)
-            inside_gt_bbox_mask = torch.logical_and(inside_center_bbox_mask,
-                                                    inside_gt_bbox_mask)
-        elif self.shrink_sampling:
-            w_shrink = offset_x.new_zeros(offset_x.shape)
-            h_shrink = offset_y.new_zeros(offset_y.shape)
-
-            # project the points on current lvl back to the `original` sizes
-            lvl_begin = 0
-            for lvl_idx, num_points_lvl in enumerate(num_points_per_lvl):
-                lvl_end = lvl_begin + num_points_lvl
-                w_shrink[lvl_begin:lvl_end] = (
-                    1-self.shrink_sigma[lvl_idx]) * w[lvl_begin:lvl_end]
-                h_shrink[lvl_begin:lvl_end] = (
-                    1-self.shrink_sigma[lvl_idx]) * h[lvl_begin:lvl_end]
-                lvl_begin = lvl_end
-
-            inside_shrink_bbox_mask = ((torch.abs(offset_x) < w_shrink/2)
-                                       & (torch.abs(offset_y) < h_shrink/2))
-            inside_gt_bbox_mask = torch.logical_and(inside_shrink_bbox_mask,
-                                                    inside_gt_bbox_mask)
-
-        # condition2: limit the regression range for each location
-        max_regress_distance = bbox_targets.max(-1)[0]
-        inside_regress_range = (
-            (max_regress_distance >= regress_ranges[..., 0])
-            & (max_regress_distance <= regress_ranges[..., 1]))
-
-        # if there are still more than one objects for a location,
-        # we choose the one with minimal area
-        areas[inside_gt_bbox_mask == 0] = INF
-        areas[inside_regress_range == 0] = INF
-        min_area, min_area_inds = areas.min(dim=1)
-
-        if gt_labels == None:
-            labels = torch.zeros_like(min_area_inds)  # set as FG in RPN
-        else:
-            labels = gt_labels[min_area_inds]
-        labels[min_area == INF] = self.num_classes  # set as BG
-        bbox_targets = bbox_targets[range(num_points), min_area_inds]
-
-        theta_targets = gt_angle[range(num_points), min_area_inds]
-        bbox_targets = torch.cat([bbox_targets, theta_targets], dim=1)
-
-        return labels, bbox_targets
-
-    def centerness_target(self, pos_bbox_targets):
-        """Compute centerness targets.
+    def get_targets(self,
+                    anchor_list,
+                    valid_flag_list,
+                    gt_bboxes_list,
+                    img_metas,
+                    gt_bboxes_ignore_list=None,
+                    gt_labels_list=None,
+                    label_channels=1,
+                    unmap_outputs=True):
+        """Compute regression and classification targets for anchors in
+        multiple images.
 
         Args:
-            pos_bbox_targets (Tensor): BBox targets of positive bboxes in shape
-                (num_pos, 4)
-        Returns:
-            Tensor: Centerness target.
-        """
-        # only calculate pos centerness targets, otherwise there may be nan
-        left_right = pos_bbox_targets[:, [0, 2]]
-        top_bottom = pos_bbox_targets[:, [1, 3]]
-        if len(left_right) == 0:
-            centerness_targets = left_right[..., 0]
-        else:
-            centerness_targets = (
-                left_right.min(dim=-1)[0] / left_right.max(dim=-1)[0]) * (
-                    top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
-        return torch.sqrt(centerness_targets)
+            anchor_list (list[list[Tensor]]): Multi level anchors of each \
+                image. The outer list indicates images, and the inner list \
+                corresponds to feature levels of the image. Each element of \
+                the inner list is a tensor of shape (num_anchors, 5).
+            valid_flag_list (list[list[Tensor]]): Multi level valid flags of \
+                each image. The outer list indicates images, and the inner \
+                list corresponds to feature levels of the image. Each element \
+                of the inner list is a tensor of shape (num_anchors, )
+            gt_bboxes_list (list[Tensor]): Ground truth bboxes of each image.
+            img_metas (list[dict]): Meta info of each image.
+            gt_bboxes_ignore_list (list[Tensor]): Ground truth bboxes to be \
+                ignored.
+            gt_labels_list (list[Tensor]): Ground truth labels of each box.
+            label_channels (int): Channel of label.
+            unmap_outputs (bool): Whether to map outputs back to the original \
+                set of anchors.
 
-    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'bbox_preds_refine'))
+        Returns:
+            tuple: Usually returns a tuple containing learning targets.
+
+                - labels_list (list[Tensor]): Labels of each level.
+                - label_weights_list (list[Tensor]): Label weights of \
+                    each level
+                - bbox_targets_list (list[Tensor]): BBox targets of each level
+                - bbox_weights_list (list[Tensor]): BBox weights of each level
+                - num_total_pos (int): Number of positive samples in all images
+                - num_total_neg (int): Number of negative samples in all images
+            additional_returns: This function enables user-defined returns \
+                from self._get_targets_single`. These returns are currently \
+                refined to properties at each feature map (HxW dimension).
+                The results will be concatenated after the end
+        """
+        num_imgs = len(img_metas)
+        assert len(anchor_list) == len(valid_flag_list) == num_imgs
+
+        # anchor number of multi levels
+        num_level_anchors = [anchors.size(0) for anchors in anchor_list[0]]
+        num_level_anchors_list = [num_level_anchors] * num_imgs
+        # concat all level anchors to a single tensor
+        concat_anchor_list = []
+        concat_valid_flag_list = []
+        for i in range(num_imgs):
+            assert len(anchor_list[i]) == len(valid_flag_list[i])
+            concat_anchor_list.append(torch.cat(anchor_list[i]))
+            concat_valid_flag_list.append(torch.cat(valid_flag_list[i]))
+
+        # compute targets for each image
+        if gt_bboxes_ignore_list is None:
+            gt_bboxes_ignore_list = [None for _ in range(num_imgs)]
+        if gt_labels_list is None:
+            gt_labels_list = [None for _ in range(num_imgs)]
+        results = multi_apply(
+            self._get_targets_single,
+            concat_anchor_list,
+            concat_valid_flag_list,
+            num_level_anchors_list,
+            gt_bboxes_list,
+            gt_bboxes_ignore_list,
+            gt_labels_list,
+            img_metas,
+            label_channels=label_channels,
+            unmap_outputs=unmap_outputs)
+        (all_labels, all_bbox_targets, all_bbox_weights,
+         pos_inds_list) = results[:4]
+        rest_results = list(results[4:])  # user-added return values
+        # no valid anchors
+        if any([labels is None for labels in all_labels]):
+            return None
+        # sampled anchors of all images
+        num_total_pos = sum([max(inds.numel(), 1) for inds in pos_inds_list])
+        # split targets to a list w.r.t. multiple levels
+        labels_list = images_to_levels(all_labels, num_level_anchors)
+        bbox_targets_list = images_to_levels(all_bbox_targets,
+                                             num_level_anchors)
+        bbox_weights_list = images_to_levels(all_bbox_weights,
+                                             num_level_anchors)
+        res = (labels_list, bbox_targets_list,
+               bbox_weights_list, num_total_pos)
+        for i, r in enumerate(rest_results):  # user-added return values
+            rest_results[i] = images_to_levels(r, num_level_anchors)
+
+        return res + tuple(rest_results)
+
+    @force_fp32(apply_to=('cls_scores', 'bbox_preds'))
     def get_bboxes(self,
                    cls_scores,
                    bbox_preds,
-                   bbox_preds_refine,
                    score_factors=None,
                    img_metas=None,
                    cfg=None,
@@ -756,14 +660,12 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
             img_meta = img_metas[img_id]
             cls_score_list = select_single_mlvl(cls_scores, img_id)
             bbox_pred_list = select_single_mlvl(bbox_preds, img_id)
-            bbox_pred_refine_list = select_single_mlvl(
-                bbox_preds_refine, img_id)
             if with_score_factors:
                 score_factor_list = select_single_mlvl(score_factors, img_id)
             else:
                 score_factor_list = [None for _ in range(num_levels)]
 
-            results = self._get_bboxes_single(cls_score_list, bbox_pred_list, bbox_pred_refine_list,
+            results = self._get_bboxes_single(cls_score_list, bbox_pred_list,
                                               score_factor_list, mlvl_priors,
                                               img_meta, cfg, rescale, with_nms,
                                               **kwargs)
@@ -773,7 +675,6 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
     def _get_bboxes_single(self,
                            cls_score_list,
                            bbox_pred_list,
-                           bbox_pred_refine_list,
                            score_factor_list,
                            mlvl_priors,
                            img_meta,
@@ -820,7 +721,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
 
         for level_idx in range(len(cls_score_list)):
             rpn_cls_score = cls_score_list[level_idx]
-            rpn_bbox_pred = bbox_pred_refine_list[level_idx]
+            rpn_bbox_pred = bbox_pred_list[level_idx]
             assert rpn_cls_score.size()[-2:] == rpn_bbox_pred.size()[-2:]
             rpn_cls_score = rpn_cls_score.permute(1, 2, 0)
             if self.use_sigmoid_cls:
@@ -887,7 +788,8 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         scores = torch.cat(mlvl_scores)
         points = torch.cat(mlvl_valid_points)
         rpn_bbox_pred = torch.cat(mlvl_bboxes)
-        proposals = self.bbox_coder.decode(points, rpn_bbox_pred)
+        proposals = self.bbox_coder.decode(
+            self.anchor_center(points), rpn_bbox_pred, edge_swap=True)
         ids = torch.cat(level_ids)
 
         if cfg.min_bbox_size >= 0:
@@ -905,4 +807,59 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
             dets = dets[keep]
             return dets[:cfg.max_per_img]
         else:
-            return proposals.new_zeros(0, 5)
+            return proposals.new_zeros(0, 6)
+
+    def get_anchors(self, featmap_sizes, img_metas, device='cuda'):
+        """Get anchors according to feature map sizes.
+
+        Args:
+            featmap_sizes (list[tuple]): Multi-level feature map sizes.
+            img_metas (list[dict]): Image meta info.
+            device (torch.device | str): Device for returned tensors
+
+        Returns:
+            tuple (list[Tensor]):
+
+                - anchor_list (list[Tensor]): Anchors of each image.
+                - valid_flag_list (list[Tensor]): Valid flags of each image.
+        """
+        num_imgs = len(img_metas)
+
+        # since feature map sizes of all images are the same, we only compute
+        # anchors for one time
+        multi_level_anchors = self.prior_generator.grid_priors(
+            featmap_sizes, device)
+        anchor_list = [multi_level_anchors for _ in range(num_imgs)]
+
+        # for each image, we compute valid flags of multi level anchors
+        valid_flag_list = []
+        for img_id, img_meta in enumerate(img_metas):
+            multi_level_flags = self.prior_generator.valid_flags(
+                featmap_sizes, img_meta['pad_shape'], device)
+            valid_flag_list.append(multi_level_flags)
+
+        return anchor_list, valid_flag_list
+
+    def centerness_target(self, pos_bbox_targets):
+        """Compute centerness targets.
+
+        Args:
+            pos_bbox_targets (Tensor): BBox targets of positive bboxes in shape
+                (num_pos, 4)
+        Returns:
+            Tensor: Centerness target.
+        """
+        # only calculate pos centerness targets, otherwise there may be nan
+        left_right = pos_bbox_targets[:, [0, 2]]
+        top_bottom = pos_bbox_targets[:, [1, 3]]
+        if len(left_right) == 0:
+            centerness_targets = left_right[..., 0]
+        else:
+            centerness_targets = (
+                left_right.min(dim=-1)[0] / left_right.max(dim=-1)[0]) * (
+                    top_bottom.min(dim=-1)[0] / top_bottom.max(dim=-1)[0])
+        return torch.sqrt(centerness_targets)
+
+    def anchor_center(self, anchors):
+        # Get anchor centers from anchors.
+        return anchors[..., :2]

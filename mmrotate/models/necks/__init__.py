@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .re_fpn import ReFPN
-from .lff import LFF
+from .cbaf import ChannelBilinearAtteitonFusion
 
-__all__ = ['ReFPN']
+__all__ = ['ReFPN', 'ChannelBilinearAtteitonFusion']

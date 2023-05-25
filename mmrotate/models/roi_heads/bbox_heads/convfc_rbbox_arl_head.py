@@ -14,7 +14,7 @@ from mmcv.cnn import ConvModule
 
 
 @ROTATED_HEADS.register_module()
-class FineGrainedEnhancedHead(RotatedBBoxHead):
+class RotatedConvFCBBoxARLHead(RotatedBBoxHead):
     def __init__(self,
                  num_shared_convs=0,
                  num_shared_fcs=2,
@@ -30,7 +30,7 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
                  init_cfg=None,
                  *args,
                  **kwargs):
-        super(FineGrainedEnhancedHead, self).__init__(
+        super(RotatedConvFCBBoxARLHead, self).__init__(
             *args, init_cfg=init_cfg, **kwargs)
         assert (num_shared_convs + num_shared_fcs + num_cls_convs +
                 num_cls_fcs + num_reg_convs + num_reg_fcs > 0)
@@ -336,15 +336,15 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
                     return y
                 joint_weight = (
                     pos_ious * normalize(bbox_targets[pos_inds, -1])).pow(0.5)
-                weight[pos_inds] = torch.exp(
-                    self.beta * joint_weight) * joint_weight
 
             loss_cls_ = self.loss_cls(
                 cls_score,
                 labels,
+                joint_weight,
                 weight=weight,
                 avg_factor=avg_factor,
                 reduction_override=reduction_override)
+
             if isinstance(loss_cls_, dict):
                 losses.update(loss_cls_)
             else:
@@ -362,11 +362,10 @@ class FineGrainedEnhancedHead(RotatedBBoxHead):
 
 
 @ROTATED_HEADS.register_module()
-class FineGrainedEnhancedHeadRotatedShared2FCBBoxHead(FineGrainedEnhancedHead):
+class RotatedShared2FCBBoxARLHead(RotatedConvFCBBoxARLHead):
     """Shared2FC RBBox head."""
-
     def __init__(self, fc_out_channels=1024, *args, **kwargs):
-        super(FineGrainedEnhancedHeadRotatedShared2FCBBoxHead, self).__init__(
+        super(RotatedShared2FCBBoxARLHead, self).__init__(
             num_shared_convs=0,
             num_shared_fcs=2,
             num_cls_convs=0,
@@ -379,9 +378,9 @@ class FineGrainedEnhancedHeadRotatedShared2FCBBoxHead(FineGrainedEnhancedHead):
 
 
 @ROTATED_HEADS.register_module()
-class FineGrainedEnhancedHeadRotatedShared4Conv1FCBBoxHead(FineGrainedEnhancedHead):
+class RotatedShared4Conv1FCBBoxARLHead(RotatedConvFCBBoxARLHead):
     def __init__(self, fc_out_channels=1024, *args, **kwargs):
-        super(FineGrainedEnhancedHeadRotatedShared4Conv1FCBBoxHead, self).__init__(
+        super(RotatedShared4Conv1FCBBoxARLHead, self).__init__(
             num_shared_convs=4,
             num_shared_fcs=1,
             num_cls_convs=0,

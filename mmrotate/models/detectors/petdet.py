@@ -1,32 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import warnings
-
-import torch
-
-from ..builder import ROTATED_DETECTORS, build_backbone, build_head, build_neck
+from ..builder import ROTATED_DETECTORS, build_neck
 from .two_stage import RotatedTwoStageDetector
 
 
 @ROTATED_DETECTORS.register_module()
-class CARPNRotatedTwoStageDetector(RotatedTwoStageDetector):
-    """Base class for rotated two-stage detectors.
-
-    Two-stage detectors typically consisting of a region proposal network and a
-    task-specific regression head.
-    """
-
+class PETDet(RotatedTwoStageDetector):
     def __init__(self,
                  backbone,
                  rpn_head,
                  roi_head,
-                 course_label_table,
                  train_cfg,
                  test_cfg,
                  neck=None,
+                 fusion=None,
                  pretrained=None,
                  init_cfg=None):
-        self.course_label_table = torch.tensor(course_label_table).cuda()
-        super(CARPNRotatedTwoStageDetector, self).__init__(
+        super(PETDet, self).__init__(
             backbone=backbone,
             neck=neck,
             rpn_head=rpn_head,
@@ -36,10 +25,19 @@ class CARPNRotatedTwoStageDetector(RotatedTwoStageDetector):
             pretrained=pretrained,
             init_cfg=init_cfg)
 
-    def covert_course_label(self, gt_lables):
-        for i in range(gt_lables.shape[0]):
-            gt_lables[i] = self.course_label_table[gt_lables[i]]
-        return gt_lables
+        self.fusion = build_neck(fusion)
+
+    @property
+    def with_fusion(self):
+        """bool: whether the detector has RPN"""
+        return hasattr(self, 'fusion') and self.fusion is not None
+
+    def extract_feat(self, img):
+        """Directly extract features from the backbone+neck."""
+        x = self.backbone(img)
+        if self.with_neck:
+            x = self.neck(x)
+        return x
 
     def forward_train(self,
                       img,
@@ -86,13 +84,11 @@ class CARPNRotatedTwoStageDetector(RotatedTwoStageDetector):
         if self.with_rpn:
             proposal_cfg = self.train_cfg.get('rpn_proposal',
                                               self.test_cfg.rpn)
-            target_lables = [self.course_label_table[gt_label]
-                             for gt_label in gt_labels]
             rpn_losses, proposal_list = self.rpn_head.forward_train(
                 x,
                 img_metas,
                 gt_bboxes,
-                target_lables,
+                gt_labels=None,
                 gt_bboxes_ignore=gt_bboxes_ignore,
                 proposal_cfg=proposal_cfg,
                 **kwargs)
@@ -100,6 +96,8 @@ class CARPNRotatedTwoStageDetector(RotatedTwoStageDetector):
         else:
             proposal_list = proposals
 
+        if self.with_fusion:
+            x = self.fusion(x)
         roi_losses = self.roi_head.forward_train(x, img_metas, proposal_list,
                                                  gt_bboxes, gt_labels,
                                                  gt_bboxes_ignore, gt_masks,
@@ -107,3 +105,46 @@ class CARPNRotatedTwoStageDetector(RotatedTwoStageDetector):
         losses.update(roi_losses)
 
         return losses
+
+    async def async_simple_test(self,
+                                img,
+                                img_meta,
+                                proposals=None,
+                                rescale=False):
+        """Async test without augmentation."""
+        assert self.with_bbox, 'Bbox head must be implemented.'
+        x = self.extract_feat(img)
+
+        if proposals is None:
+            proposal_list = await self.rpn_head.async_simple_test_rpn(
+                x, img_meta)
+        else:
+            proposal_list = proposals
+
+        if self.with_fusion:
+            x = self.fusion(x)
+        return await self.roi_head.async_simple_test(
+            x, proposal_list, img_meta, rescale=rescale)
+
+    def simple_test(self, img, img_metas, proposals=None, rescale=False):
+        """Test without augmentation."""
+
+        assert self.with_bbox, 'Bbox head must be implemented.'
+        x = self.extract_feat(img)
+        if proposals is None:
+            proposal_list = self.rpn_head.simple_test_rpn(x, img_metas)
+        else:
+            proposal_list = proposals
+
+        if self.with_fusion:
+            x = self.fusion(x)
+        return self.roi_head.simple_test(
+            x, proposal_list, img_metas, rescale=rescale)
+
+    def aug_test(self, imgs, img_metas, rescale=False):
+        """Test with augmentations.
+
+        If rescale is False, then returned bboxes and masks will fit the scale
+        of imgs[0].
+        """
+        raise NotImplementedError

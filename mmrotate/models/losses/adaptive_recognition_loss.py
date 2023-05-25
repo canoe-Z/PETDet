@@ -9,15 +9,17 @@ from ..builder import ROTATED_LOSSES
 from mmdet.models.losses.utils import weight_reduce_loss
 
 
-def softmax_focal_loss(pred,
-                       label,
-                       gamma=2.0,
-                       weight=None,
-                       reduction='mean',
-                       avg_factor=None,
-                       class_weight=None,
-                       ignore_index=-100,
-                       avg_non_ignore=False):
+def adaptive_recognition_loss(pred,
+                              label,
+                              joint_weight,
+                              beta=2.0,
+                              gamma=1.0,
+                              weight=None,
+                              reduction='mean',
+                              avg_factor=None,
+                              class_weight=None,
+                              ignore_index=-100,
+                              avg_non_ignore=False):
     """Calculate the CrossEntropy loss.
 
     Args:
@@ -48,6 +50,8 @@ def softmax_focal_loss(pred,
         ignore_index=ignore_index)
     bg_class_ind = pred.size(1) - 1
     bg_mask = label == bg_class_ind
+    fg_mask = (label >= 0) & (label < bg_class_ind)
+
     pt = torch.exp(-loss)
 
     # average loss over non-ignored elements
@@ -60,19 +64,19 @@ def softmax_focal_loss(pred,
     if weight is None:
         weight = torch.ones_like(pred)
 
-    focal_weight = weight
-    focal_weight[bg_mask] = weight[bg_mask] * (1 - pt[bg_mask]).pow(gamma)
+    weight[fg_mask] = torch.exp(beta * joint_weight) * joint_weight
+    weight[bg_mask] = weight[bg_mask] * (1 - pt[bg_mask]).pow(gamma)
     loss = weight_reduce_loss(
-        loss, weight=focal_weight, reduction=reduction, avg_factor=avg_factor)
+        loss, weight=weight, reduction=reduction, avg_factor=avg_factor)
 
     return loss
 
 
 @ROTATED_LOSSES.register_module()
-class SoftmaxFocalLoss(nn.Module):
+class AdaptiveRecognitionLoss(nn.Module):
     def __init__(self,
-                 alpha=0.25,
-                 gamma=2.0,
+                 beta=2.0,
+                 gamma=1.0,
                  use_sigmoid=False,
                  reduction='mean',
                  class_weight=None,
@@ -96,10 +100,10 @@ class SoftmaxFocalLoss(nn.Module):
             avg_non_ignore (bool): The flag decides to whether the loss is
                 only averaged over non-ignored targets. Default: False.
         """
-        super(SoftmaxFocalLoss, self).__init__()
+        super(AdaptiveRecognitionLoss, self).__init__()
         assert use_sigmoid is False
         self.use_sigmoid = use_sigmoid
-        self.alpha = alpha
+        self.beta = beta
         self.gamma = gamma
         self.reduction = reduction
         self.loss_weight = loss_weight
@@ -114,7 +118,7 @@ class SoftmaxFocalLoss(nn.Module):
                 'labels, which is the same with PyTorch official '
                 'cross_entropy, set ``avg_non_ignore=True``.')
 
-        self.cls_criterion = softmax_focal_loss
+        self.cls_criterion = adaptive_recognition_loss
 
     def extra_repr(self):
         """Extra repr."""
@@ -124,6 +128,7 @@ class SoftmaxFocalLoss(nn.Module):
     def forward(self,
                 cls_score,
                 label,
+                joint_weight,
                 weight=None,
                 avg_factor=None,
                 reduction_override=None,
@@ -156,9 +161,11 @@ class SoftmaxFocalLoss(nn.Module):
         else:
             class_weight = None
 
-        loss_cls = self.loss_weight * softmax_focal_loss(
+        loss_cls = self.loss_weight * adaptive_recognition_loss(
             cls_score,
             label,
+            joint_weight,
+            beta=self.beta,
             gamma=self.gamma,
             weight=weight,
             class_weight=class_weight,
