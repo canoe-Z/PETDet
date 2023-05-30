@@ -64,7 +64,8 @@ def adaptive_recognition_loss(pred,
     if weight is None:
         weight = torch.ones_like(pred)
 
-    weight[fg_mask] = torch.exp(beta * joint_weight) * joint_weight
+    if joint_weight is not None:
+        weight[fg_mask] = weight[fg_mask] * torch.exp(beta * joint_weight) * joint_weight
     weight[bg_mask] = weight[bg_mask] * (1 - pt[bg_mask]).pow(gamma)
     loss = weight_reduce_loss(
         loss, weight=weight, reduction=reduction, avg_factor=avg_factor)

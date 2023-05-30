@@ -2,6 +2,7 @@
 from ..builder import ROTATED_DETECTORS, build_neck
 from .two_stage import RotatedTwoStageDetector
 
+import torch
 
 @ROTATED_DETECTORS.register_module()
 class PETDet(RotatedTwoStageDetector):
@@ -25,7 +26,8 @@ class PETDet(RotatedTwoStageDetector):
             pretrained=pretrained,
             init_cfg=init_cfg)
 
-        self.fusion = build_neck(fusion)
+        if fusion is not None:
+            self.fusion = build_neck(fusion)
 
     @property
     def with_fusion(self):
@@ -39,6 +41,26 @@ class PETDet(RotatedTwoStageDetector):
             x = self.neck(x)
         return x
 
+    def forward_dummy(self, img):
+        """Used for computing network flops.
+
+        See `mmdetection/tools/analysis_tools/get_flops.py`
+        """
+        outs = ()
+        # backbone
+        x = self.extract_feat(img)
+        # rpn
+        if self.with_rpn:
+            rpn_outs = self.rpn_head(x)
+            outs = outs + (rpn_outs, )
+        if self.with_fusion:
+            x = self.fusion(x)
+        proposals = torch.randn(1000, 5).to(img.device)
+        # roi_head
+        roi_outs = self.roi_head.forward_dummy(x, proposals)
+        outs = outs + (roi_outs, )
+        return outs
+    
     def forward_train(self,
                       img,
                       img_metas,

@@ -24,7 +24,6 @@ class RotatedConvFCBBoxARLHead(RotatedBBoxHead):
                  num_reg_fcs=0,
                  conv_out_channels=256,
                  fc_out_channels=1024,
-                 beta=2.0,
                  conv_cfg=None,
                  norm_cfg=None,
                  init_cfg=None,
@@ -50,7 +49,6 @@ class RotatedConvFCBBoxARLHead(RotatedBBoxHead):
         self.fc_out_channels = fc_out_channels
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
-        self.beta = beta
 
         # add shared convs and fcs
         self.shared_convs, self.shared_fcs, last_layer_dim = \
@@ -317,6 +315,7 @@ class RotatedConvFCBBoxARLHead(RotatedBBoxHead):
 
             # loss_cls
             weight = torch.ones_like(labels).float()
+            joint_weight = None
             if pos_inds.any():
                 pos_decode_bbox_pred = self.bbox_coder.decode(
                     rois[pos_inds.type(torch.bool), 1:], pos_bbox_pred)
@@ -364,6 +363,7 @@ class RotatedConvFCBBoxARLHead(RotatedBBoxHead):
 @ROTATED_HEADS.register_module()
 class RotatedShared2FCBBoxARLHead(RotatedConvFCBBoxARLHead):
     """Shared2FC RBBox head."""
+
     def __init__(self, fc_out_channels=1024, *args, **kwargs):
         super(RotatedShared2FCBBoxARLHead, self).__init__(
             num_shared_convs=0,

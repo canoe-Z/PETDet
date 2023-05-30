@@ -10,7 +10,5 @@ from .rotate_standard_roi_head import RotatedStandardRoIHead
 __all__ = [
     'RotatedBBoxHead', 'RotatedConvFCBBoxHead', 'RotatedShared2FCBBoxHead',
     'RotatedStandardRoIHead', 'RotatedSingleRoIExtractor',
-    'OrientedStandardRoIHead', 'RoITransRoIHead', 'GVRatioRoIHead',
-    'OrientedDoubleHeadRoIHead', 'OrientedCascadeRoIHead', 'OrientedDynamicRoIHead',
-    'OrientedRefineRoIHead'
+    'OrientedStandardRoIHead', 'RoITransRoIHead', 'GVRatioRoIHead'
 ]

@@ -2,7 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mmcv.cnn import ConvModule, Scale, bias_init_with_prob, normal_init
+from mmcv.cnn import ConvModule, Scale, bias_init_with_prob, normal_init, trunc_normal_init
 from mmcv.ops import batched_nms
 from mmcv.runner import force_fp32
 from mmdet.core import images_to_levels, multi_apply, reduce_mean, unmap
@@ -60,8 +60,11 @@ class DecoupledAttentionModule(nn.Module):
 
         if self.enable_sa:
             self.spatial_attention = nn.Conv2d(
-                1, 1, 3, stride=1, padding=1)
-            self.sigmoid = nn.Sigmoid()
+                1, 1, 7, stride=1, padding=3)
+            self.gamma = nn.Parameter(torch.zeros(
+                (1, feat_channels, 1, 1)), requires_grad=True)
+            self.tanh = nn.Tanh()
+            #self.sigmoid = nn.Sigmoid()
 
     def init_weights(self):
         for m in self.layer_attention.modules():
@@ -70,6 +73,7 @@ class DecoupledAttentionModule(nn.Module):
         if self.enable_sa:
             for m in self.spatial_attention.modules():
                 if isinstance(m, nn.Conv2d):
+                    #xavier_init(m, distribution='uniform')
                     normal_init(m, std=0.001)
         normal_init(self.reduction_conv.conv, std=0.01)
 
@@ -97,7 +101,7 @@ class DecoupledAttentionModule(nn.Module):
 
         if self.enable_sa:
             spatial_weight = torch.mean(feat, dim=1, keepdim=True)
-            feat = feat * self.sigmoid(self.spatial_attention(spatial_weight))
+            feat = feat + feat * self.gamma * self.tanh(self.spatial_attention(spatial_weight))
 
         return feat
 
@@ -112,11 +116,11 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                      type='RotatedAnchorGenerator',
                      octave_base_scale=8,
                      scales_per_octave=1,
-                     center_offset=0.0,
                      ratios=[1.0],
                      strides=[8, 16, 32, 64, 128]),
                  scale_angle=False,
-                 use_fpn_feature=False,
+                 enable_dam=True,
+                 use_fpn_feature=True,
                  enable_sa=True,
                  loss_cls=dict(
                      type='FocalLoss',
@@ -129,9 +133,10 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
                  **kwargs):
         self.start_level = start_level
         self.scale_angle = scale_angle
-        self.enable_sa = enable_sa
         self.angle_version = angle_version
+        self.enable_dam = enable_dam
         self.use_fpn_feature = use_fpn_feature
+        self.enable_sa = enable_sa
 
         super(QualityOrientedRPNHead, self).__init__(
             num_classes=1,
@@ -171,14 +176,15 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
             num_layers = self.stacked_convs + 1
         else:
             num_layers = self.stacked_convs
-        self.cls_decomp = DecoupledAttentionModule(self.feat_channels,
-                                                  num_layers,
-                                                  self.enable_sa,
-                                                  self.conv_cfg, self.norm_cfg)
-        self.reg_decomp = DecoupledAttentionModule(self.feat_channels,
-                                                  num_layers,
-                                                  self.enable_sa,
-                                                  self.conv_cfg, self.norm_cfg)
+        if self.enable_dam:
+            self.cls_decomp = DecoupledAttentionModule(self.feat_channels,
+                                                       num_layers,
+                                                       self.enable_sa,
+                                                       self.conv_cfg, self.norm_cfg)
+            self.reg_decomp = DecoupledAttentionModule(self.feat_channels,
+                                                       num_layers,
+                                                       self.enable_sa,
+                                                       self.conv_cfg, self.norm_cfg)
         self.relu = nn.ReLU()
         self.qopn_cls = nn.Conv2d(
             self.feat_channels,
@@ -198,8 +204,9 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         for m in self.inter_convs:
             normal_init(m.conv, std=0.01)
 
-        self.cls_decomp.init_weights()
-        self.reg_decomp.init_weights()
+        if self.enable_dam:
+            self.cls_decomp.init_weights()
+            self.reg_decomp.init_weights()
 
         normal_init(self.qopn_cls, std=0.01, bias=bias_cls)
         normal_init(self.qopn_reg, std=0.01)
@@ -243,11 +250,15 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         for inter_conv in self.inter_convs:
             x = inter_conv(x)
             inter_feats.append(x)
-            feat = torch.cat(inter_feats, 1)
+        feat = torch.cat(inter_feats, 1)
 
-        avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
-        cls_feat = self.cls_decomp(feat, avg_feat)
-        reg_feat = self.reg_decomp(feat, avg_feat)
+        if self.enable_dam:
+            avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
+            cls_feat = self.cls_decomp(feat, avg_feat)
+            reg_feat = self.reg_decomp(feat, avg_feat)
+        else:
+            cls_feat = inter_feats[-1]
+            reg_feat = inter_feats[-1]
 
         # prediction
         cls_score = self.qopn_cls(cls_feat)

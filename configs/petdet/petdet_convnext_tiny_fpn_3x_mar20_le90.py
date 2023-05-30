@@ -1,4 +1,4 @@
-_base_ = ['./qorpn_atss_rcnn_lff_feh_r50_fpn_3x_mar20_le90.py']
+_base_ = ['./qopn_rcnn_cbaf_arl_r50_fpn_3x_mar20_le90.py']
 
 # please install mmcls>=0.22.0
 # import mmcls.models to trigger register_module in mmcls
@@ -31,9 +31,3 @@ optimizer = dict(
             'relative_position_bias_table': dict(decay_mult=0.),
             'norm': dict(decay_mult=0.)
         }))
-
-# custom_hooks=[dict(
-#         type='ExpMomentumEMAHook',
-#         total_iter = 149*36,
-#         priority=49)
-#     ]

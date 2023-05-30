@@ -1,11 +1,11 @@
 _base_ = [
-    '../_base_/datasets/mar20.py', '../_base_/schedules/schedule_3x.py',
+    '../_base_/datasets/fair1mv2.py', '../_base_/schedules/schedule_1x.py',
     '../_base_/default_runtime.py'
 ]
 
 angle_version = 'le90'
 model = dict(
-    type='OrientedRCNN',
+    type='PETDet',
     backbone=dict(
         type='ResNet',
         depth=50,
@@ -24,18 +24,11 @@ model = dict(
         add_extra_convs='on_input',
         num_outs=5),
     rpn_head=dict(
-        type='QualityOrientedRPNHeadATSS',
+        type='QualityOrientedRPNHead',
         in_channels=256,
         stacked_convs=2,
         feat_channels=256,
-        strides=[8, 16, 32, 64],
-        prior_generator=dict(
-            type='RotatedAnchorGenerator',
-            octave_base_scale=8,
-            scales_per_octave=1,
-            center_offset=0.0,
-            ratios=[1.0],
-            strides=[8, 16, 32, 64]),
+        strides=[8, 16, 32, 64, 128],
         scale_angle=False,
         use_fpn_feature=True,
         enable_sa=True,
@@ -44,10 +37,10 @@ model = dict(
             use_sigmoid=True,
             gamma=2.0,
             alpha=0.25,
-            loss_weight=0.5),
+            loss_weight=0.25),
         bbox_coder=dict(
             type='RotatedDistancePointBBoxCoder', angle_version=angle_version),
-        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5)),
+        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.25)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(
@@ -64,7 +57,7 @@ model = dict(
             in_channels=256,
             fc_out_channels=1024,
             roi_feat_size=7,
-            num_classes=20,
+            num_classes=37,
             bbox_coder=dict(
                 type='DeltaXYWHAOBBoxCoder',
                 angle_range=angle_version,
@@ -127,7 +120,7 @@ img_norm_cfg = dict(
 train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations', with_bbox=True),
-    dict(type='RResize', img_scale=(800, 800)),
+    dict(type='RResize', img_scale=(1024, 1024)),
     dict(
         type='RRandomFlip',
         flip_ratio=[0.25, 0.25, 0.25],
@@ -148,7 +141,7 @@ lr_config = dict(
     warmup='linear',
     warmup_iters=2000,
     warmup_ratio=1.0 / 2000,
-    step=[24, 33])
+    step=[8, 11])
 
 optimizer = dict(lr=0.02)
-evaluation = dict(interval=36, metric='mAP')
+evaluation = dict(interval=12, metric='mAP')
