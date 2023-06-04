@@ -1,4 +1,4 @@
-_base_ = ['../qopn_rcnn_r50_fpn_1x_fair1m_le90.py']
+_base_ = ['./qopn_rcnn_r50_fpn_3x_mar20_le90.py']
 
 model = dict(
     neck=dict(
@@ -10,6 +10,10 @@ model = dict(
         num_outs=6),
     rpn_head=dict(
         start_level=1),
+    fusion=dict(
+        type='BCFN',
+        feat_channels=256,
+    ),
     roi_head=dict(
         bbox_roi_extractor=dict(
             featmap_strides=[4, 8, 16, 32],

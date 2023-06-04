@@ -46,7 +46,9 @@ class DecoupledAttentionModule(nn.Module):
             self.stacked_convs,
             1,
             stride=1,
-            padding=0)
+            padding=0,
+            groups=1,
+            bias=True)
 
         self.reduction_conv = ConvModule(
             self.in_channels,
@@ -60,11 +62,16 @@ class DecoupledAttentionModule(nn.Module):
 
         if self.enable_sa:
             self.spatial_attention = nn.Conv2d(
-                1, 1, 7, stride=1, padding=3)
-            self.gamma = nn.Parameter(torch.zeros(
-                (1, feat_channels, 1, 1)), requires_grad=True)
-            self.tanh = nn.Tanh()
+                2,
+                1,
+                7,
+                stride=1,
+                padding=3,
+                groups=1,
+                bias=True)
             #self.sigmoid = nn.Sigmoid()
+            self.gamma = nn.Parameter(
+                1e-6 * torch.ones((1, feat_channels, 1, 1)), requires_grad=True)
 
     def init_weights(self):
         for m in self.layer_attention.modules():
@@ -100,8 +107,11 @@ class DecoupledAttentionModule(nn.Module):
         feat = self.reduction_conv.activate(feat)
 
         if self.enable_sa:
-            spatial_weight = torch.mean(feat, dim=1, keepdim=True)
-            feat = feat + feat * self.gamma * self.tanh(self.spatial_attention(spatial_weight))
+            avg_feat = torch.mean(feat, dim=1, keepdim=True)
+            max_feat, _ = torch.max(feat, dim=1, keepdim=True)
+            spatial_weight = torch.cat([avg_feat, max_feat], dim=1)
+            spatial_weight = self.spatial_attention(spatial_weight)
+            feat = feat + self.gamma * feat * spatial_weight
 
         return feat
 
