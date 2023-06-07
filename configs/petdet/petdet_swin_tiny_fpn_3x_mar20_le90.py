@@ -1,4 +1,4 @@
-_base_ = ['./qopn_rcnn_cbaf_arl_r50_fpn_3x_mar20_le90.py']
+_base_ = ['./petdet_r50_fpn_3x_mar20_le90.py']
 
 pretrained = 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_tiny_patch4_window7_224.pth'  # noqa
 
@@ -35,9 +35,3 @@ optimizer = dict(
             'relative_position_bias_table': dict(decay_mult=0.),
             'norm': dict(decay_mult=0.)
         }))
-
-custom_hooks = [dict(
-    type='ExpMomentumEMAHook',
-    total_iter=149*36,
-    priority=49)
-]

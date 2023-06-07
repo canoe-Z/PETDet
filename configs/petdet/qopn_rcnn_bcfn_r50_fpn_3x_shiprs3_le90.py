@@ -1,4 +1,4 @@
-_base_ = ['./qopn_rcnn_r50_fpn_3x_mar20_le90.py']
+_base_ = ['./qopn_rcnn_r50_fpn_3x_shiprs3_le90.py']
 
 model = dict(
     neck=dict(
@@ -11,7 +11,7 @@ model = dict(
     rpn_head=dict(
         start_level=1),
     fusion=dict(
-        type='ChannelBilinearAtteitonFusion',
+        type='BCFN',
         feat_channels=256,
     ),
     roi_head=dict(

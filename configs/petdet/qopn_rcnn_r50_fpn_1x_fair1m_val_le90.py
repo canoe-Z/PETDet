@@ -1,11 +1,11 @@
 _base_ = [
-    '../_base_/datasets/dotav1.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/fair1mv2_val.py', '../_base_/schedules/schedule_1x.py',
     '../_base_/default_runtime.py'
 ]
 
 angle_version = 'le90'
 model = dict(
-    type='OrientedRCNN',
+    type='PETDet',
     backbone=dict(
         type='ResNet',
         depth=50,
@@ -24,7 +24,7 @@ model = dict(
         add_extra_convs='on_input',
         num_outs=5),
     rpn_head=dict(
-        type='QualityOrientedRPNHeadATSS',
+        type='QualityOrientedRPNHead',
         in_channels=256,
         stacked_convs=2,
         feat_channels=256,
@@ -37,10 +37,10 @@ model = dict(
             use_sigmoid=True,
             gamma=2.0,
             alpha=0.25,
-            loss_weight=0.5),
+            loss_weight=0.25),
         bbox_coder=dict(
             type='RotatedDistancePointBBoxCoder', angle_version=angle_version),
-        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5)),
+        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.25)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(
@@ -57,7 +57,7 @@ model = dict(
             in_channels=256,
             fc_out_channels=1024,
             roi_feat_size=7,
-            num_classes=15,
+            num_classes=37,
             bbox_coder=dict(
                 type='DeltaXYWHAOBBoxCoder',
                 angle_range=angle_version,

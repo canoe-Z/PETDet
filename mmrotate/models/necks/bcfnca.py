@@ -35,13 +35,12 @@ class ChannelAttention(BaseModule):
         for m in self.modules():
             if isinstance(m, (nn.Conv2d)):
                 normal_init(m, std=0.001)
-                #xavier_init(m, distribution='uniform')
 
     def forward(self, x):
         """Forward function."""
         weight = self.avgpool(x)
         weight = self.channel_attention(weight)
-        x = x*weight
+        x = x * weight
         return x
 
 
@@ -58,20 +57,6 @@ class ChannelInteractionModule(BaseModule):
 
         self.ca1 = ChannelAttention(feat_channels)
         self.ca2 = ChannelAttention(feat_channels)
-        # self.fc1 = ConvModule(
-        #     feat_channels,
-        #     feat_channels,
-        #     1,
-        #     conv_cfg=None,
-        #     norm_cfg=None,
-        #     act_cfg=None)
-        # self.fc2 = ConvModule(
-        #     feat_channels,
-        #     feat_channels,
-        #     1,
-        #     conv_cfg=None,
-        #     norm_cfg=None,
-        #     act_cfg=None)
 
     def init_weights(self):
         """Initialize the weights of module."""
@@ -115,7 +100,6 @@ class BCFNCA(BaseModule):
             conv_cfg=None,
             norm_cfg=None,
             act_cfg=None)
-        # self.gelu = nn.GELU()
         upsample_cfg = dict(mode='nearest')
         self.upsample_cfg = upsample_cfg.copy()
         self.gamma = nn.Parameter(torch.ones(
@@ -139,7 +123,6 @@ class BCFNCA(BaseModule):
 
             feat1, feat2 = self.cim(inputs[i], upsampled_feat)
             feat = feat1 * feat2
-            # feat = self.gelu(feat)
             feat = self.pw_conv(feat)
 
             inputs[i] = inputs[i] + self.gamma * feat

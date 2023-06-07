@@ -128,10 +128,15 @@ class FPNStyleBaseline(BaseModule):
             norm_cfg=None,
             act_cfg=None)
 
+    def init_weights(self):
+        """Initialize the weights of module."""
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d)):
+                xavier_init(m, distribution='uniform')
+                
     def forward(self, inputs):
         """Forward function."""
         inputs = list(inputs)
-
         for i in range(len(inputs[:-1])):
             prev_shape = inputs[i].shape[2:]
             upsampled_feat = F.interpolate(

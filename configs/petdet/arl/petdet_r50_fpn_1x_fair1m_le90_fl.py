@@ -4,12 +4,6 @@ model = dict(
     roi_head=dict(
         bbox_head=dict(
             type='FineGrainedEnhancedHeadRotatedShared2FCBBoxHead',
-            loss_cls=dict(
-                type='SoftmaxFocalLoss',
-                use_sigmoid=False,
-                gamma=2.0,
-                loss_weight=1.0),
-            beta=2.0
         )
     ),
     train_cfg=dict(

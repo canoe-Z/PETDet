@@ -1,4 +1,4 @@
-_base_ = ['./qopn_rcnn_cbaf_arl_r50_fpn_3x_mar20_le90.py']
+_base_ = ['./petdet_r50_fpn_3x_mar20_le90.py']
 
 # please install mmcls>=0.22.0
 # import mmcls.models to trigger register_module in mmcls

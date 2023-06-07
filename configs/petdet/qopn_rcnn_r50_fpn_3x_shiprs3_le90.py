@@ -5,7 +5,7 @@ _base_ = [
 
 angle_version = 'le90'
 model = dict(
-    type='OrientedRCNN',
+    type='PETDet',
     backbone=dict(
         type='ResNet',
         depth=50,
@@ -21,32 +21,26 @@ model = dict(
         in_channels=[256, 512, 1024, 2048],
         out_channels=256,
         start_level=1,
-        num_outs=4),
+        add_extra_convs='on_input',
+        num_outs=5),
     rpn_head=dict(
-        type='QualityOrientedRPNHeadATSS',
+        type='QualityOrientedRPNHead',
         in_channels=256,
-        stacked_convs=4,
+        stacked_convs=2,
         feat_channels=256,
-        strides=[8, 16, 32, 64],
-        prior_generator=dict(
-            type='RotatedAnchorGenerator',
-            octave_base_scale=8,
-            scales_per_octave=1,
-            center_offset=0.0,
-            ratios=[1.0],
-            strides=[8, 16, 32, 64]),
+        strides=[8, 16, 32, 64, 128],
         scale_angle=False,
+        use_fpn_feature=True,
         enable_sa=True,
-        loss_cls_metric='FL',
         loss_cls=dict(
             type='FocalLoss',
             use_sigmoid=True,
             gamma=2.0,
             alpha=0.25,
-            loss_weight=0.5),
+            loss_weight=0.25),
         bbox_coder=dict(
             type='RotatedDistancePointBBoxCoder', angle_version=angle_version),
-        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.5)),
+        loss_bbox=dict(type='PolyGIoULoss', loss_weight=0.25)),
     roi_head=dict(
         type='OrientedStandardRoIHead',
         bbox_roi_extractor=dict(
@@ -150,3 +144,4 @@ lr_config = dict(
     step=[24, 33])
 
 optimizer = dict(lr=0.02)
+evaluation = dict(interval=36, metric='mAP')

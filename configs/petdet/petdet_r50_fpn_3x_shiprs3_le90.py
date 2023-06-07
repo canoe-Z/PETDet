@@ -1,15 +1,21 @@
-_base_ = ['./qorpn_atss_rcnn_lff_r50_fpn_3x_mar20_le90.py']
+_base_ = ['./qopn_rcnn_bcfn_r50_fpn_3x_mar20_le90.py']
 
 model = dict(
+    rpn_head=dict(
+        loss_cls=dict(
+            loss_weight=0.5
+        ),
+        loss_bbox=dict(
+            loss_weight=0.5
+        )
+    ),
     roi_head=dict(
         bbox_head=dict(
-            type='FineGrainedEnhancedHead',
+            type='RotatedShared2FCBBoxARLHead',
             loss_cls=dict(
-                type='SoftmaxFocalLoss',
-                use_sigmoid=False,
-                gamma=1.0,
-                loss_weight=1.0),
-            beta=2.0
+                type='AdaptiveRecognitionLoss',
+                beta=2.0,
+                gamma=1.5),
         )
     ),
     train_cfg=dict(
@@ -34,8 +40,9 @@ model = dict(
     )
 )
 
-custom_hooks=[dict(
-        type='ExpMomentumEMAHook',
-        total_iter = 149*36,
-        priority=49)
-    ]
+lr_config = dict(
+    policy='step',
+    warmup='linear',
+    warmup_iters=2000,
+    warmup_ratio=1.0 / 2000,
+    step=[24, 33])
