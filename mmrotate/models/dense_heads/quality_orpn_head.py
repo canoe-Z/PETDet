@@ -69,7 +69,6 @@ class DecoupledAttentionModule(nn.Module):
                 padding=3,
                 groups=1,
                 bias=True)
-            #self.sigmoid = nn.Sigmoid()
             self.gamma = nn.Parameter(
                 1e-6 * torch.ones((1, feat_channels, 1, 1)), requires_grad=True)
 
@@ -80,7 +79,6 @@ class DecoupledAttentionModule(nn.Module):
         if self.enable_sa:
             for m in self.spatial_attention.modules():
                 if isinstance(m, nn.Conv2d):
-                    #xavier_init(m, distribution='uniform')
                     normal_init(m, std=0.001)
         normal_init(self.reduction_conv.conv, std=0.01)
 
@@ -815,7 +813,8 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
 
         if cfg.min_bbox_size >= 0:
             w, h = proposals[:, 2], proposals[:, 3]
-            valid_mask = (w > cfg.min_bbox_size) & (h > cfg.min_bbox_size)
+            valid_mask = (w >= cfg.min_bbox_size) & (h >= cfg.min_bbox_size)
+
             if not valid_mask.all():
                 proposals = proposals[valid_mask]
                 scores = scores[valid_mask]
@@ -825,10 +824,11 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
             hproposals = obb2xyxy(proposals, self.angle_version)
             _, keep = batched_nms(hproposals, scores, ids, cfg.nms)
             dets = torch.cat([proposals, scores[:, None]], dim=1)
-            dets = dets[keep]
-            return dets[:cfg.max_per_img]
+            dets = dets[keep] 
         else:
             return proposals.new_zeros(0, 6)
+
+        return dets[:cfg.max_per_img]
 
     def get_anchors(self, featmap_sizes, img_metas, device='cuda'):
         """Get anchors according to feature map sizes.
