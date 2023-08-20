@@ -1,12 +1,7 @@
-_base_ = [
-    './r3det_kld_stable_r50_fpn_1x_fair1m_oc.py'
-]
-
-evaluation = dict(interval=12, metric='mAP')
-
 # dataset settings
 dataset_type = 'FAIR1MDataset'
-data_root = './data/split_ss_fair1m2_0/'
+train_root = './data/split_ss_fair1m2_0/'
+test_root = './data/split_ss_fair1m1_0/'
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 train_pipeline = [
@@ -38,16 +33,16 @@ data = dict(
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,
-        ann_file=data_root + 'trainval/annfiles/',
-        img_prefix=data_root + 'trainval/images/',
+        ann_file=train_root + 'train/annfiles/',
+        img_prefix=train_root + 'train/images/',
         pipeline=train_pipeline),
     val=dict(
         type=dataset_type,
-        ann_file=data_root + 'trainval/annfiles/',
-        img_prefix=data_root + 'trainval/images/',
+        ann_file=train_root + 'val/annfiles/',
+        img_prefix=train_root + 'val/images/',
         pipeline=test_pipeline),
     test=dict(
         type=dataset_type,
-        ann_file=data_root + 'test/images/',
-        img_prefix=data_root + 'test/images/',
+        ann_file=test_root + 'test/images/',
+        img_prefix=test_root + 'test/images/',
         pipeline=test_pipeline))

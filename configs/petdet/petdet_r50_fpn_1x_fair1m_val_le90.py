@@ -1,12 +1,5 @@
-_base_ = [
-    './redet_re50_refpn_1x_fair1m_le90.py'
-]
+_base_ = ['./petdet_r50_fpn_1x_fair1m_le90.py']
 
-fp16 = dict(loss_scale='dynamic')
-evaluation = dict(interval=12, metric='mAP')
-
-
-# dataset settings
 angle_version = 'le90'
 data_root = './data/split_ss_fair1m2_0/'
 img_norm_cfg = dict(
@@ -26,17 +19,21 @@ train_pipeline = [
     dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels'])
 ]
 data = dict(
-    samples_per_gpu=2,
-    workers_per_gpu=2,
     train=dict(
-        ann_file=data_root + 'trainval/annfiles/',
-        img_prefix=data_root + 'trainval/images/',
-        pipeline=train_pipeline,
-        version=angle_version),
+        ann_file=data_root + 'val_petdet/annfiles/',
+        img_prefix=data_root + 'val_petdet/images/',
+        pipeline=train_pipeline),
     val=dict(
-        ann_file=data_root + 'trainval/annfiles/',
-        img_prefix=data_root + 'trainval/images/',
-        version=angle_version),
-    test=dict(version=angle_version))
+        ann_file=data_root + 'val/annfiles/',
+        img_prefix=data_root + 'val/images/'),
+    test=dict(
+        ann_file=data_root + 'val/annfiles/',
+        img_prefix=data_root + 'val/images/'))
 
-optimizer = dict(lr=0.02)
+model = dict(
+    test_cfg=dict(
+        rcnn=dict(
+            score_thr=0.5,
+        )
+    )
+)

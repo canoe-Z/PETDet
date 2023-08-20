@@ -1,4 +1,4 @@
-_base_ = ['./qopn_rcnn_bcfn_r50_fpn_3x_shiprs3_le90.py']
+_base_ = ['./qopn_rcnn_bcfn_r50_fpn_1x_fair1m_le90.py']
 
 model = dict(
     rpn_head=dict(
@@ -36,13 +36,7 @@ model = dict(
             nms=None),
         rcnn=dict(
             nms_pre=1000,
-            max_per_img=1000)
+            max_per_img=1000,
+            nms_agnostic=True)
     )
 )
-
-lr_config = dict(
-    policy='step',
-    warmup='linear',
-    warmup_iters=2000,
-    warmup_ratio=1.0 / 2000,
-    step=[24, 33])

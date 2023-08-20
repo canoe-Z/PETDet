@@ -11,7 +11,7 @@ from ..builder import ROTATED_BBOX_SAMPLERS
 class RPseudoSampler(BaseSampler):
     """A pseudo sampler that does not do sampling actually."""
 
-    def __init__(self, with_score=False, **kwargs):
+    def __init__(self, with_score=True, **kwargs):
         self.with_score = with_score
 
     def _sample_pos(self, **kwargs):
@@ -31,7 +31,10 @@ class RPseudoSampler(BaseSampler):
         Returns:
             :obj:`SamplingResult`: sampler results
         """
-        bboxes = bboxes[:, :6]
+        if self.with_score:
+            bboxes = bboxes[:, :6]
+        else:
+            bboxes = bboxes[:, :5]
         pos_inds = torch.nonzero(
             assign_result.gt_inds > 0, as_tuple=False).squeeze(-1).unique()
         neg_inds = torch.nonzero(

@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/datasets/fair1mv2.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/shiprs3.py', '../_base_/schedules/schedule_3x.py',
     '../_base_/default_runtime.py'
 ]
 
@@ -26,7 +26,7 @@ model = dict(
         num_outs=5),
     bbox_head=dict(
         type='RotatedRetinaHead',
-        num_classes=37,
+        num_classes=50,
         in_channels=256,
         stacked_convs=4,
         feat_channels=256,
@@ -91,4 +91,4 @@ data = dict(
     val=dict(version=angle_version),
     test=dict(version=angle_version))
 optimizer = dict(lr=0.01)
-evaluation = dict(interval=12, metric='mAP')
+evaluation = dict(interval=36, metric='mAP')

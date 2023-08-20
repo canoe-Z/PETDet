@@ -1,21 +1,12 @@
-_base_ = ['./qopn_rcnn_bcfn_r50_fpn_1x_fair1m_le90.py']
+_base_ = ['../qopn_rcnn_bcfn_r50_fpn_1x_fair1m_le90.py']
 
 model = dict(
-    rpn_head=dict(
-        loss_cls=dict(
-            loss_weight=0.5
-        ),
-        loss_bbox=dict(
-            loss_weight=0.5
-        )
-    ),
     roi_head=dict(
         bbox_head=dict(
-            type='RotatedShared2FCBBoxARLHead',
             loss_cls=dict(
-                type='AdaptiveRecognitionLoss',
-                beta=2.5,
-                gamma=1.5),
+                type='SoftmaxFocalLoss',
+                alpha=0.25,
+                gamma=2.0),
         )
     ),
     train_cfg=dict(
@@ -27,7 +18,9 @@ model = dict(
         rcnn=dict(
             sampler=dict(
                 _delete_=True,
-                type='RPseudoSampler')),
+                type='RPseudoSampler',
+                with_score=False),
+        ),
     ),
     test_cfg=dict(
         rpn=dict(
@@ -35,7 +28,7 @@ model = dict(
             max_per_img=1000,
             nms=None),
         rcnn=dict(
-            nms_pre=1000,
+            nms_pre=2000,
             max_per_img=1000)
     )
 )

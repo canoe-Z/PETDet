@@ -1,9 +1,12 @@
-_base_ = ['./qorpn_atss_rcnn_lff_r50_fpn_1x_fair1m_le90.py']
+_base_ = ['../qopn_rcnn_bcfn_r50_fpn_1x_fair1m_le90.py']
 
 model = dict(
     roi_head=dict(
         bbox_head=dict(
-            type='FineGrainedEnhancedHeadRotatedShared2FCBBoxHead',
+            loss_cls=dict(
+                type='SoftmaxFocalLoss',
+                alpha=0.25,
+                gamma=2.0),
         )
     ),
     train_cfg=dict(
@@ -15,7 +18,9 @@ model = dict(
         rcnn=dict(
             sampler=dict(
                 _delete_=True,
-                type='RPseudoSampler')),
+                type='RPseudoSampler',
+                with_score=False),
+        ),
     ),
     test_cfg=dict(
         rpn=dict(

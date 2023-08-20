@@ -1,21 +1,23 @@
 _base_ = [
-    '../_base_/datasets/fair1mv2.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/shiprs3.py', '../_base_/schedules/schedule_3x.py',
     '../_base_/default_runtime.py'
 ]
 
 angle_version = 'le90'
 model = dict(
-    type='ReDet',
+    type='RoITransformer',
     backbone=dict(
-        type='ReResNet',
+        type='ResNet',
         depth=50,
         num_stages=4,
         out_indices=(0, 1, 2, 3),
         frozen_stages=1,
+        norm_cfg=dict(type='BN', requires_grad=True),
+        norm_eval=True,
         style='pytorch',
-        pretrained='temp_dirs/pretrained/re_resnet50_c8_batch256-25b16846.pth'),
+        init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
     neck=dict(
-        type='ReFPN',
+        type='FPN',
         in_channels=[256, 512, 1024, 2048],
         out_channels=256,
         num_outs=5),
@@ -51,10 +53,9 @@ model = dict(
             dict(
                 type='RotatedSingleRoIExtractor',
                 roi_layer=dict(
-                    type='RiRoIAlignRotated',
+                    type='RoIAlignRotated',
                     out_size=7,
-                    num_samples=2,
-                    num_orientations=8,
+                    sample_num=2,
                     clockwise=True),
                 out_channels=256,
                 featmap_strides=[4, 8, 16, 32]),
@@ -65,7 +66,7 @@ model = dict(
                 in_channels=256,
                 fc_out_channels=1024,
                 roi_feat_size=7,
-                num_classes=37,
+                num_classes=50,
                 bbox_coder=dict(
                     type='DeltaXYWHAHBBoxCoder',
                     angle_range=angle_version,
@@ -85,7 +86,7 @@ model = dict(
                 in_channels=256,
                 fc_out_channels=1024,
                 roi_feat_size=7,
-                num_classes=37,
+                num_classes=50,
                 bbox_coder=dict(
                     type='DeltaXYWHAOBBoxCoder',
                     angle_range=angle_version,
@@ -101,6 +102,7 @@ model = dict(
                     loss_weight=1.0),
                 loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0))
         ]),
+    # model training and testing settings
     train_cfg=dict(
         rpn=dict(
             assigner=dict(
@@ -170,7 +172,7 @@ model = dict(
             nms_pre=2000,
             min_bbox_size=0,
             score_thr=0.05,
-            nms=dict(iou_thr=0.1),
+            nms=dict(type=angle_version, iou_thr=0.1),
             max_per_img=2000)))
 
 img_norm_cfg = dict(
@@ -195,4 +197,4 @@ data = dict(
     test=dict(version=angle_version))
 
 optimizer = dict(lr=0.02)
-evaluation = dict(interval=12, metric='mAP')
+evaluation = dict(interval=36, metric='mAP')

@@ -119,8 +119,10 @@ model = dict(
         rcnn=dict(
             nms_pre=2000,
             min_bbox_size=0,
-            score_thr=0.05,
+            # score_thr=0.05,
+            score_thr=0.5,
             nms=dict(iou_thr=0.1),
+            nms_agnostic=True,
             max_per_img=2000)))
 
 img_norm_cfg = dict(
@@ -139,10 +141,25 @@ train_pipeline = [
     dict(type='DefaultFormatBundle'),
     dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels'])
 ]
-data = dict(
-    train=dict(pipeline=train_pipeline, version=angle_version),
-    val=dict(version=angle_version),
-    test=dict(version=angle_version))
+# data = dict(
+#     train=dict(pipeline=train_pipeline, version=angle_version),
+#     val=dict(version=angle_version),
+#     test=dict(version=angle_version))
 
 optimizer = dict(lr=0.02)
 evaluation = dict(interval=12, metric='mAP')
+
+data_root = './data/split_ss_fair1m2_0/'
+data = dict(
+    samples_per_gpu=2,
+    workers_per_gpu=2,
+    train=dict(
+        ann_file=data_root + 'val_orcnn_nms/annfiles/',
+        img_prefix=data_root + 'val_orcnn_nms/images/',
+        pipeline=train_pipeline),
+    val=dict(
+        ann_file=data_root + 'val/annfiles/',
+        img_prefix=data_root + 'val/images/'),
+    test=dict(
+        ann_file=data_root + 'val/annfiles/',
+        img_prefix=data_root + 'val/images/'))

@@ -131,3 +131,4 @@ data = dict(
     val=dict(version=angle_version),
     test=dict(version=angle_version)) 
 optimizer = dict(lr=0.01)
+evaluation = dict(interval=12, metric='mAP')

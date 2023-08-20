@@ -81,9 +81,10 @@ data = dict(
     test=dict(version=angle_version))
 
 optimizer = dict(lr=0.01)
-lr_config = dict(
-    policy='step',
-    warmup='linear',
-    warmup_iters=2000,
-    warmup_ratio=0.0005,
-    step=[8, 11])
+evaluation = dict(interval=12, metric='mAP')
+# lr_config = dict(
+#     policy='step',
+#     warmup='linear',
+#     warmup_iters=2000,
+#     warmup_ratio=0.0005,
+#     step=[8, 11])

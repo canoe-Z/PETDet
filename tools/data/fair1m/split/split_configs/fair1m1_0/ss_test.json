@@ -2,11 +2,9 @@
   "nproc": 10,
   "load_type": "fair1m",
   "img_dirs": [
-    "data/FAIR1M2_0/debug/images/"
+    "data/FAIR1M1_0/test/images/"
   ],
-  "ann_dirs": [
-    "data/FAIR1M2_0/debug/labelXml/"
-  ],
+  "ann_dirs": null,
   "classes": null,
   "prior_annfile": null,
   "merge_type": "addition",
@@ -27,6 +25,6 @@
     116,
     124 
   ],
-  "save_dir": "data/split_ss_fair1m2_0/debug/",
+  "save_dir": "data/split_ss_fair1m1_0/test/",
   "save_ext": ".png"
 }

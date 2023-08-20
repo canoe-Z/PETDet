@@ -283,40 +283,46 @@ class RotatedConvFCBBoxARLHead(RotatedBBoxHead):
         """
         losses = dict()
         avg_factor = max(torch.sum(label_weights > 0).float().item(), 1.)
+
+        # loss_bbox
+        bg_class_ind = self.num_classes
+        # 0~self.num_classes-1 are FG, self.num_classes is BG
+        pos_inds = (labels >= 0) & (labels < bg_class_ind)
+        # do not perform bounding box regression for BG anymore.
+        if pos_inds.any():
+            if self.reg_decoded_bbox:
+                # When the regression loss (e.g. `IouLoss`,
+                # `GIouLoss`, `DIouLoss`) is applied directly on
+                # the decoded bounding boxes, it decodes the
+                # already encoded coordinates to absolute format.
+                bbox_pred = self.bbox_coder.decode(rois[:, 1:], bbox_pred)
+            if self.reg_class_agnostic:
+                pos_bbox_pred = bbox_pred.view(
+                    bbox_pred.size(0), 5)[pos_inds.type(torch.bool)]
+            else:
+                pos_bbox_pred = bbox_pred.view(
+                    bbox_pred.size(0), -1,
+                    5)[pos_inds.type(torch.bool),
+                        labels[pos_inds.type(torch.bool)]]
+            losses_bbox = self.loss_bbox(
+                pos_bbox_pred,
+                bbox_targets[pos_inds.type(torch.bool), :-1],
+                bbox_weights[pos_inds.type(torch.bool)],
+                avg_factor=bbox_targets.size(0),
+                reduction_override=reduction_override)
+        else:
+            losses_bbox = bbox_pred[pos_inds].sum()
+
+        # loss_cls
         if cls_score.numel() > 0:
-            # loss_bbox
             bg_class_ind = self.num_classes
             # 0~self.num_classes-1 are FG, self.num_classes is BG
             pos_inds = (labels >= 0) & (labels < bg_class_ind)
-            # do not perform bounding box regression for BG anymore.
-            if pos_inds.any():
-                if self.reg_decoded_bbox:
-                    # When the regression loss (e.g. `IouLoss`,
-                    # `GIouLoss`, `DIouLoss`) is applied directly on
-                    # the decoded bounding boxes, it decodes the
-                    # already encoded coordinates to absolute format.
-                    bbox_pred = self.bbox_coder.decode(rois[:, 1:], bbox_pred)
-                if self.reg_class_agnostic:
-                    pos_bbox_pred = bbox_pred.view(
-                        bbox_pred.size(0), 5)[pos_inds.type(torch.bool)]
-                else:
-                    pos_bbox_pred = bbox_pred.view(
-                        bbox_pred.size(0), -1,
-                        5)[pos_inds.type(torch.bool),
-                            labels[pos_inds.type(torch.bool)]]
-                losses_bbox = self.loss_bbox(
-                    pos_bbox_pred,
-                    bbox_targets[pos_inds.type(torch.bool), :-1],
-                    bbox_weights[pos_inds.type(torch.bool)],
-                    avg_factor=bbox_targets.size(0),
-                    reduction_override=reduction_override)
-            else:
-                losses_bbox = bbox_pred[pos_inds].sum()
-
-            # loss_cls
             weight = torch.ones_like(labels).float()
             joint_weight = None
             if pos_inds.any():
+                pos_bbox_pred = bbox_pred.view(
+                    bbox_pred.size(0), 5)[pos_inds.type(torch.bool)]
                 pos_decode_bbox_pred = self.bbox_coder.decode(
                     rois[pos_inds.type(torch.bool), 1:], pos_bbox_pred)
                 pos_decode_bbox_target = self.bbox_coder.decode(
@@ -356,7 +362,9 @@ class RotatedConvFCBBoxARLHead(RotatedBBoxHead):
                 fg_mask = labels != self.num_classes
                 losses['fg_acc'] = accuracy(
                     cls_score[fg_mask], labels[fg_mask])
-            losses['loss_bbox'] = losses_bbox
+        else:
+            losses['loss_cls'] = cls_score.sum() * 0
+        losses['loss_bbox'] = losses_bbox
         return losses
 
 

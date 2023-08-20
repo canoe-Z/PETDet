@@ -1,11 +1,11 @@
 _base_ = [
-    '../_base_/datasets/fair1mv2.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/shiprs3.py', '../_base_/schedules/schedule_3x.py',
     '../_base_/default_runtime.py'
 ]
 
-angle_version = 'le135'
+angle_version = 'oc'
 model = dict(
-    type='RotatedRetinaNet',
+    type='R3Det',
     backbone=dict(
         type='ResNet',
         depth=50,
@@ -26,11 +26,10 @@ model = dict(
         num_outs=5),
     bbox_head=dict(
         type='RotatedRetinaHead',
-        num_classes=37,
+        num_classes=50,
         in_channels=256,
         stacked_convs=4,
         feat_channels=256,
-        assign_by_circumhbbox=None,
         anchor_generator=dict(
             type='RotatedAnchorGenerator',
             octave_base_scale=4,
@@ -40,9 +39,9 @@ model = dict(
         bbox_coder=dict(
             type='DeltaXYWHAOBBoxCoder',
             angle_range=angle_version,
-            norm_factor=1,
+            norm_factor=None,
             edge_swap=False,
-            proj_xy=True,
+            proj_xy=False,
             target_means=(.0, .0, .0, .0, .0),
             target_stds=(1.0, 1.0, 1.0, 1.0, 1.0)),
         loss_cls=dict(
@@ -51,18 +50,61 @@ model = dict(
             gamma=2.0,
             alpha=0.25,
             loss_weight=1.0),
-        loss_bbox=dict(type='L1Loss', loss_weight=1.0)),
+        loss_bbox=dict(type='SmoothL1Loss', beta=0.11, loss_weight=1.0)),
+    frm_cfgs=[dict(in_channels=256, featmap_strides=[8, 16, 32, 64, 128])],
+    num_refine_stages=1,
+    refine_heads=[
+        dict(
+            type='RotatedRetinaRefineHead',
+            num_classes=50,
+            in_channels=256,
+            stacked_convs=4,
+            feat_channels=256,
+            assign_by_circumhbbox=None,
+            anchor_generator=dict(
+                type='PseudoAnchorGenerator', strides=[8, 16, 32, 64, 128]),
+            bbox_coder=dict(
+                type='DeltaXYWHAOBBoxCoder',
+                angle_range=angle_version,
+                norm_factor=None,
+                edge_swap=False,
+                proj_xy=False,
+                target_means=(0.0, 0.0, 0.0, 0.0, 0.0),
+                target_stds=(1.0, 1.0, 1.0, 1.0, 1.0)),
+            loss_cls=dict(
+                type='FocalLoss',
+                use_sigmoid=True,
+                gamma=2.0,
+                alpha=0.25,
+                loss_weight=1.0),
+            loss_bbox=dict(type='SmoothL1Loss', beta=0.11, loss_weight=1.0))
+    ],
     train_cfg=dict(
-        assigner=dict(
-            type='MaxIoUAssigner',
-            pos_iou_thr=0.5,
-            neg_iou_thr=0.4,
-            min_pos_iou=0,
-            ignore_iof_thr=-1,
-            iou_calculator=dict(type='RBboxOverlaps2D')),
-        allowed_border=-1,
-        pos_weight=-1,
-        debug=False),
+        s0=dict(
+            assigner=dict(
+                type='MaxIoUAssigner',
+                pos_iou_thr=0.5,
+                neg_iou_thr=0.4,
+                min_pos_iou=0,
+                ignore_iof_thr=-1,
+                iou_calculator=dict(type='RBboxOverlaps2D')),
+            allowed_border=-1,
+            pos_weight=-1,
+            debug=False),
+        sr=[
+            dict(
+                assigner=dict(
+                    type='MaxIoUAssigner',
+                    pos_iou_thr=0.6,
+                    neg_iou_thr=0.5,
+                    min_pos_iou=0,
+                    ignore_iof_thr=-1,
+                    iou_calculator=dict(type='RBboxOverlaps2D')),
+                allowed_border=-1,
+                pos_weight=-1,
+                debug=False)
+        ],
+        stage_loss_weights=[1.0]),
     test_cfg=dict(
         nms_pre=2000,
         min_bbox_size=0,
@@ -91,4 +133,4 @@ data = dict(
     val=dict(version=angle_version),
     test=dict(version=angle_version))
 optimizer = dict(lr=0.01)
-evaluation = dict(interval=12, metric='mAP')
+evaluation = dict(interval=36, metric='mAP')

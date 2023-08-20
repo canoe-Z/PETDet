@@ -1,12 +1,12 @@
-_base_ = ['./qopn_rcnn_bcfn_r50_fpn_3x_shiprs3_le90.py']
+_base_ = ['../qopn_rcnn_bcfn_r50_fpn_1x_fair1m_le90.py']
 
 model = dict(
     rpn_head=dict(
         loss_cls=dict(
-            loss_weight=0.5
+            loss_weight=0.25
         ),
         loss_bbox=dict(
-            loss_weight=0.5
+            loss_weight=0.25
         )
     ),
     roi_head=dict(
@@ -14,15 +14,14 @@ model = dict(
             type='RotatedShared2FCBBoxARLHead',
             loss_cls=dict(
                 type='AdaptiveRecognitionLoss',
-                beta=2.5,
-                gamma=1.5),
+                beta=3.0,
+                gamma=2.0),
         )
     ),
     train_cfg=dict(
         rpn_proposal=dict(
             nms_pre=2000,
             max_per_img=1000,
-            nms=None,
         ),
         rcnn=dict(
             sampler=dict(
@@ -32,17 +31,9 @@ model = dict(
     test_cfg=dict(
         rpn=dict(
             nms_pre=2000,
-            max_per_img=1000,
-            nms=None),
+            max_per_img=1000),
         rcnn=dict(
             nms_pre=1000,
             max_per_img=1000)
     )
 )
-
-lr_config = dict(
-    policy='step',
-    warmup='linear',
-    warmup_iters=2000,
-    warmup_ratio=1.0 / 2000,
-    step=[24, 33])
