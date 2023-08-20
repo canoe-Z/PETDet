@@ -12,7 +12,6 @@ from .rotated_retinanet import RotatedRetinaNet
 from .s2anet import S2ANet
 from .single_stage import RotatedSingleStageDetector
 from .two_stage import RotatedTwoStageDetector
-from .rotated_fcos import RotatedFCOS
 from .rotated_rpn import RotatedRPN
 from .petdet import PETDet
 
