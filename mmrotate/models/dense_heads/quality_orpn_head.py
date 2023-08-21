@@ -2,7 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mmcv.cnn import ConvModule, Scale, bias_init_with_prob, normal_init, trunc_normal_init
+from mmcv.cnn import ConvModule, Scale, bias_init_with_prob, normal_init
 from mmcv.ops import batched_nms
 from mmcv.runner import force_fp32
 from mmdet.core import images_to_levels, multi_apply, reduce_mean, unmap
@@ -824,7 +824,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
             hproposals = obb2xyxy(proposals, self.angle_version)
             _, keep = batched_nms(hproposals, scores, ids, cfg.nms)
             dets = torch.cat([proposals, scores[:, None]], dim=1)
-            dets = dets[keep] 
+            dets = dets[keep]
         else:
             return proposals.new_zeros(0, 6)
 
