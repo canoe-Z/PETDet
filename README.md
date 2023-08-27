@@ -9,6 +9,8 @@ Fine-grained object detection (FGOD) extends object detection with the capabilit
 comming soon.
 
 ## Installation
+This repo is based on [mmrotate 0.x](https://github.com/open-mmlab/mmrotate) and [OBBDetection](https://github.com/jbwang1997/OBBDetection).
+
 **Step 1.** Create a conda environment and activate it.
 
 ```shell
@@ -69,12 +71,12 @@ Assuming you have put the splited FAIR1M dataset into `data/split_ss_fair1m2_0/`
 
 ```
 ./dist_test.sh configs/petdet/ \
-  petdet_r50_fpn_1x_fair1m_le90.py weights/ \
-  petdet_r50_fpn_1x_fair1m_le90.pth 4 --format-only \
+  petdet_r50_fpn_1x_fair1m_le90.py \
+  weights/petdet_r50_fpn_1x_fair1m_le90.pth 4 --format-only \
   --eval-options submission_dir=work_dirs/FAIR1M_2.0_results
 ```
 
-Then, you can upload `work_dirs/FAIR1M_2.0_results/submission_zip/test.zip` to [FAIR1M offical evalution server](https://www.gaofen-challenge.com/benchmark)
+Then, you can upload `work_dirs/FAIR1M_2.0_results/submission_zip/test.zip` to [ISPRS Benchmark](https://www.gaofen-challenge.com/benchmark).
 
 ## Training
 
