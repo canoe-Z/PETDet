@@ -1,5 +1,5 @@
-# PETDet
-Official implement for the paper: PETDet: Proposal Enhancement for Two-Stage Fine-Grained Object Detection (under review).
+# PETDet: Proposal Enhancement for Two-Stage Fine-Grained Object Detection
+Official implement for PETDet (under review).
 
 
 ## Introduction
