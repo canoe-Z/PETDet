@@ -63,6 +63,11 @@ cd mmrotate
 pip install -v -e .
 ```
 ## Data Preparation
+Download datassts:
+- [FAIR1M Dataset](https://www.gaofen-challenge.com/benchmark)
+- [MAR20 Dataset](https://gcheng-nwpu.github.io/)
+- [ShipRSImageNet Dataset](https://github.com/zzndream/ShipRSImageNet)  
+  
 For FAIR1M, Please crop the original images into 1024×1024 patches with an overlap of 200 by run the [split tool](tools/data/fair1m/README.md).
 
 The data structure is as follows:
