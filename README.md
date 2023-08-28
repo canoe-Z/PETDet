@@ -1,6 +1,7 @@
 # PETDet: Proposal Enhancement for Two-Stage Fine-Grained Object Detection
-Official implement for PETDet (under review).
+Official implement for PETDet (under review). 
 
+The second place winning solution (2/220) in the track of Fine-grained Object Recognition in High-Resolution Optical Images, 2021 Gaofen Challenge on Automated High-Resolution Earth Observation Image Interpretation.
 
 ## Introduction
 ![petdet_arch](docs/petdet.png) 
