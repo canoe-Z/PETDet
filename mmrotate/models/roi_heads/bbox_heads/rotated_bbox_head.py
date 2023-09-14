@@ -421,8 +421,10 @@ class RotatedBBoxHead(BaseModule):
         else:
             det_bboxes, det_labels = multiclass_nms_rotated(
                 bboxes, scores, cfg.score_thr, cfg.nms, cfg.max_per_img)
-            if cfg.nms_agnostic is not None:
-                _, keep = nms_rotated(det_bboxes[:,:-1], det_bboxes[:,-1], cfg.nms.iou_thr, det_labels)
+            nms_agnostic = cfg.get('nms_agnostic', None)
+            if nms_agnostic is not None:
+                _, keep = nms_rotated(
+                    det_bboxes[:, :-1], det_bboxes[:, -1], cfg.nms.iou_thr, det_labels)
                 det_bboxes = det_bboxes[keep]
                 det_labels = det_labels[keep]
             return det_bboxes, det_labels

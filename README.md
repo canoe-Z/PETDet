@@ -59,7 +59,7 @@ mim install mmdet==2.28.2
 **Step 4.** Install PETDet from source.
 ```shell
 git clone https://github.com/canoe-Z/PETDet.git
-cd mmrotate
+cd PETDet
 pip install -v -e .
 ```
 ## Data Preparation
