@@ -42,10 +42,10 @@ conda create --name petdet python=3.10 -y
 conda activate petdet
 ```
 
-**Step 2.** Install PyTorch following [official instructions](https://pytorch.org/get-started/locally/), e.g.
+**Step 2.** Install PyTorch following [official instructions](https://pytorch.org/get-started/locally/). Pytorch 1.13.1 is recommend.
 
 ```shell
-conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
+conda install pytorch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1 pytorch-cuda=11.7 -c pytorch -c nvidia
 ```
 
 **Step 3.** Install [MMCV 1.x](https://github.com/open-mmlab/mmcv) and [MMDetection 2.x](https://github.com/open-mmlab/mmdetection) using [MIM](https://github.com/open-mmlab/mim).
@@ -99,7 +99,7 @@ PETDet
 Assuming you have put the splited FAIR1M dataset into `data/split_ss_fair1m2_0/` and have downloaded the models into the `weights/`, you can now evaluate the models on the FAIR1M_V2.0 test split:
 
 ```
-./dist_test.sh configs/petdet/ \
+./tools/dist_test.sh configs/petdet/ \
   petdet_r50_fpn_1x_fair1m_le90.py \
   weights/petdet_r50_fpn_1x_fair1m_le90.pth 4 --format-only \
   --eval-options submission_dir=work_dirs/FAIR1M_2.0_results
