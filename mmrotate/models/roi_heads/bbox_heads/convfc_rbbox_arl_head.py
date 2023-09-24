@@ -6,11 +6,10 @@ from mmcv.runner import force_fp32
 from mmdet.models.losses import accuracy
 from mmdet.models.utils import build_linear_layer
 
+from mmrotate.core.bbox import rbbox_overlaps
+
 from ...builder import ROTATED_HEADS
 from .rotated_bbox_head import RotatedBBoxHead
-
-from mmrotate.core.bbox import rbbox_overlaps
-from mmcv.cnn import ConvModule
 
 
 @ROTATED_HEADS.register_module()
@@ -176,6 +175,7 @@ class RotatedConvFCBBoxARLHead(RotatedBBoxHead):
 
         cls_score = self.fc_cls(x_cls) if self.with_cls else None
         bbox_pred = self.fc_reg(x_reg) if self.with_reg else None
+
         return cls_score, bbox_pred
 
     def _get_target_single(self, pos_bboxes, neg_bboxes, pos_gt_bboxes,
