@@ -313,7 +313,6 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
         anchor_list, valid_flag_list = self.get_anchors(
             featmap_sizes, img_metas, device=device)
         label_channels = self.cls_out_channels if self.use_sigmoid_cls else 1
-
         cls_reg_targets = self.get_targets(
             anchor_list,
             valid_flag_list,
@@ -329,6 +328,7 @@ class QualityOrientedRPNHead(OrientedAnchorFreeHead):
 
         # anchor number of multi levels
         num_level_anchors = [anchors.size(0) for anchors in anchor_list[0]]
+
         # concat all level anchors and flags to a single tensor
         concat_anchor_list = []
         for i, _ in enumerate(anchor_list):
