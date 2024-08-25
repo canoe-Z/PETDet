@@ -42,7 +42,7 @@ class ChannelInteractionModule(BaseModule):
     def forward(self, x1, x2):
         """Forward function."""
         x1_1, x1_2 = torch.chunk(x1, 2, dim=1)
-        x2_1, x2_2 = torch.chunk(x1, 2, dim=1)
+        x2_1, x2_2 = torch.chunk(x2, 2, dim=1)
         x1 = torch.cat([x1_1, x2_2], dim=1)
         x2 = torch.cat([x2_1, x1_2], dim=1)
         x1 = self.fc1(x1)
@@ -133,7 +133,7 @@ class FPNStyleBaseline(BaseModule):
         for m in self.modules():
             if isinstance(m, (nn.Conv2d)):
                 xavier_init(m, distribution='uniform')
-                
+
     def forward(self, inputs):
         """Forward function."""
         inputs = list(inputs)
