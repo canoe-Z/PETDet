@@ -1,8 +1,6 @@
 # PETDet: Proposal Enhancement for Two-Stage Fine-Grained Object Detection (TGRS 2023)
 
-[[📖 Paper](https://arxiv.org/pdf/2211.12860.pdf)]
-
-Official implement for PETDet.
+[[📖 Paper](https://arxiv.org/pdf/2312.10515.pdf)]Official implement for PETDet.
 
 The second place winning solution (2/220) in the track of Fine-grained Object Recognition in High-Resolution Optical Images, 2021 Gaofen Challenge on Automated High-Resolution Earth Observation Image Interpretation.
 
